@@ -30,8 +30,7 @@ export function Home() {
     const forceUpdate = React.useCallback(() => updateState({}), []);
 
     useEffect(() => {
-        loadNewPokemon(true);
-        setApiLoading(false);
+        loadNewPokemon(true).then(() => setApiLoading(false));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -58,11 +57,11 @@ export function Home() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [battleFactoryState]);
 
-    function loadNewPokemon(init = true) {
+    async function loadNewPokemon(init = true) {
         setSelectedPokemon(null);
         if (init) {
             for (let i = 0; i < 6; i++) {
-                randomNewPokemon(pokemonOptions, i, setPokemonOptions);
+                await randomNewPokemon(pokemonOptions, i, setPokemonOptions);
             }
         }
         for (let i = 0; i < 3; i++) {
@@ -70,28 +69,28 @@ export function Home() {
                 (winStreak + 1) % (BATTLE_ROUNDS + 1) !== 0 ||
                 winStreak >= (BATTLE_ROUNDS + 1) * 2
             )
-                randomNewPokemon(opponentPokemon, i, setOpponentPokemon);
+                await randomNewPokemon(opponentPokemon, i, setOpponentPokemon);
             else {
                 if (winStreak === BATTLE_ROUNDS)
-                    opponentPokemon[i] = getPokemonByName(
+                    opponentPokemon[i] = await getPokemonByName(
                         TRAINER_ALAZAR.pokemon[i]
                     );
                 if (winStreak === BATTLE_ROUNDS * 2 + 1)
-                    opponentPokemon[i] = getPokemonByName(
+                    opponentPokemon[i] = await getPokemonByName(
                         TRAINER_BLAKE.pokemon[i]
                     );
                 getPokemonData(opponentPokemon, i, setOpponentPokemon);
-                createRandomMoveset(opponentPokemon, i, setOpponentPokemon);
+                await createRandomMoveset(opponentPokemon, i, setOpponentPokemon);
                 setOpponentPokemon(opponentPokemon);
             }
         }
         forceUpdate();
     }
 
-    function randomNewPokemon(pokemonData, i, setFunc) {
-        pokemonData[i] = generateRandomPokemon(pokemonData);
+    async function randomNewPokemon(pokemonData, i, setFunc) {
+        pokemonData[i] = await generateRandomPokemon(pokemonData);
         getPokemonData(pokemonData, i, setFunc);
-        createRandomMoveset(pokemonData, i, setFunc);
+        await createRandomMoveset(pokemonData, i, setFunc);
         setFunc(pokemonData);
     }
 
@@ -106,7 +105,7 @@ export function Home() {
         setFunc(pokemonData);
     }
 
-    function createRandomMoveset(pokemonArr, index, setFunc) {
+    async function createRandomMoveset(pokemonArr, index, setFunc) {
         let moves = [];
         let pokemon = pokemonArr[index];
         /// Determine whether pokemon should use physical, special, or both categories of moves
@@ -121,11 +120,11 @@ export function Home() {
                 pokemon.base_stats[1] > pokemon.base_stats[3]
                     ? "physical"
                     : "special";
-        /// New move arr
-        let newMoves = [];
-        for (const move of pokemonArr[index].moves) {
-            let m = getMoveByName(move.move.name);
-            newMoves.push(m);
+        /// New move arr (fetched in parallel so one pokemon's whole learnset resolves in one round trip)
+        let newMoves = await Promise.all(
+            pokemonArr[index].moves.map((move) => getMoveByName(move.move.name))
+        );
+        for (const m of newMoves) {
             if (
                 m.damage_class.name !== "status" &&
                 m.power &&
@@ -143,9 +142,9 @@ export function Home() {
         /// update pokemon moves;
         pokemonArr[index].moves_data = newMoves;
         if (moves.length < 4) {
-            let choices = DEFAULT_MOVES.map((m) => {
-                return getMoveByName(m.name); // Load the default moves
-            });
+            let choices = await Promise.all(
+                DEFAULT_MOVES.map((m) => getMoveByName(m.name)) // Load the default moves
+            );
             shuffle(choices);
             moves = [...moves, ...choices];
         }
@@ -158,10 +157,10 @@ export function Home() {
                 move.name === "self-destruct"
             ) {
                 // Do nothing
-            } else if (move.meta.drain < 0)
+            } else if (move.meta && move.meta.drain < 0)
                 move.power =
                     move.power > 120 || move.name === "volt-tackle" ? 150 : 120;
-            else if (move.priority === 0 && move.meta.stat_chance !== 100) {
+            else if (move.meta && move.priority === 0 && move.meta.stat_chance !== 100) {
                 if (move.power < 75) move.power = 75;
                 if (move.power > 95) move.power = 95;
                 else if (move.name === "tri-attack")
@@ -171,11 +170,11 @@ export function Home() {
             }
         }
         shuffle(moves);
-        pokemonArr[index].moveset = getGoodRandomMoveset(moves);
+        pokemonArr[index].moveset = await getGoodRandomMoveset(moves);
         setFunc(pokemonArr);
     }
 
-    function nextBattle() {
+    async function nextBattle() {
         if (
             (winStreak + 1) % (BATTLE_ROUNDS + 1) === 0 &&
             winStreak < 10 && // no third boss yet
@@ -185,7 +184,7 @@ export function Home() {
             return;
         }
         setApiLoading(true);
-        loadNewPokemon(false);
+        await loadNewPokemon(false);
         setBattleFactoryState("battle");
         setApiLoading(false);
     }
@@ -220,9 +219,11 @@ export function Home() {
                 >
                     <h1>Battle Factory</h1>
                     <button
-                        onClick={() => {
-                            loadNewPokemon();
+                        onClick={async () => {
+                            setApiLoading(true);
+                            await loadNewPokemon();
                             setBattleFactoryState("teambuild");
+                            setApiLoading(false);
                         }}
                     >
                         Start!

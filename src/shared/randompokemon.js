@@ -1,22 +1,25 @@
 import { PogeyData } from "./pogey";
 import { getPokemonById, getMoveByName } from "./processjson";
-import pokedex from "shared/thirdgenpokedex";
 import { shuffle } from "shared";
 import { DEFAULT_MOVES } from "./legalmoves";
 
-export function generateRandomPokemon(pokemonTeam) {
-    let choices = [...pokedex];
-    choices = shuffle(choices);
-    // make sure unique pokemon
-    for (const poke of choices) {
-        if (pokemonTeam.filter((mon) => mon.name === poke.name).length > 0)
-            continue;
-        return getPokemonById(poke.id - 1);
+// National Pokedex number of the latest released pokemon (Gen 9 + Paldea DLC).
+const MAX_POKEMON_ID = 1025;
+
+export async function generateRandomPokemon(pokemonTeam) {
+    const usedIds = new Set(
+        pokemonTeam.filter((mon) => mon).map((mon) => mon.id)
+    );
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const id = generateRandomPokemonId();
+        if (usedIds.has(id)) continue;
+        return await getPokemonById(id);
     }
+    throw new Error("Could not find a unique pokemon after 50 attempts");
 }
 
 export function generateRandomPokemonId() {
-    return Math.floor(Math.random() * 386);
+    return Math.floor(Math.random() * MAX_POKEMON_ID) + 1;
 }
 
 export function getPokemonName(data) {
@@ -73,7 +76,7 @@ export function getRandomType() {
     return getRandomKey(PogeyData.types).toLowerCase();
 }
 
-export function getGoodRandomMoveset(moves) {
+export async function getGoodRandomMoveset(moves) {
     let choices = [...moves];
     let moveset = [];
 
@@ -99,7 +102,7 @@ export function getGoodRandomMoveset(moves) {
         moveset = [...moveset, ...choices.slice(0, 4 - moveset.length)];
     }
     for (let move of moveset) {
-        if (move.meta === undefined) move = getMoveByName(move.name);
+        if (move.meta === undefined) move = await getMoveByName(move.name);
         if (move.name === "hidden-power" || move.name === "secret-power") {
             move.type.name = (" " + getRandomType()).slice(1);
             move.power = 80;

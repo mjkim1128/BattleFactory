@@ -94,8 +94,9 @@ export function Move(props) {
                     className="move-info-div"
                     id={
                         props.moveOwner === "party"
-                            ? props.move.meta.stat_chance === 100 ||
-                              props.move.meta.drain !== 0
+                            ? (props.move.meta &&
+                                  (props.move.meta.stat_chance === 100 ||
+                                      props.move.meta.drain !== 0))
                                 ? "party-extra-space"
                                 : "party"
                             : ""
@@ -108,8 +109,9 @@ export function Move(props) {
                     </p>
                     <p>Priority: {props.move.priority}</p>
 
-                    {(props.move.meta.stat_chance === 100 ||
-                        props.move.meta.drain !== 0 ||
+                    {((props.move.meta &&
+                        (props.move.meta.stat_chance === 100 ||
+                            props.move.meta.drain !== 0)) ||
                         props.move.name === "explosion" ||
                         props.move.name === "self-destruct") && (
                         <p>Description: {effect_text}</p>

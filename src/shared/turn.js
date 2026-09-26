@@ -123,7 +123,7 @@ export function doAttack(attacker, defender, move) {
     );
     if (
         attacker.hp[0] < attacker.hp[1] &&
-        move.meta !== undefined &&
+        move.meta &&
         move.meta.drain > 0
     ) {
         // Drain hp (giga-drain, drain-punch)
@@ -153,7 +153,7 @@ export function doAttack(attacker, defender, move) {
                 Math.round((hpNumber / attacker.hp[1]) * 1000) / 10 +
                 "% HP!"
         );
-    } else if (move.meta !== undefined && move.meta.drain < 0) {
+    } else if (move.meta && move.meta.drain < 0) {
         // Recoil
         let hpNumber = 0;
         [hpNumber, attacker.hp[0]] =
@@ -210,6 +210,7 @@ export function doMoveEffects(attacker, defender, move) {
     let text = [];
     if (
         attacker.hp[0] > 0 &&
+        move.meta &&
         move.meta.stat_chance === 100 &&
         move.meta.category.name === "damage+raise"
     ) {
@@ -217,6 +218,7 @@ export function doMoveEffects(attacker, defender, move) {
     }
     if (
         defender.hp[0] > 0 &&
+        move.meta &&
         move.meta.stat_chance === 100 &&
         move.meta.category.name === "damage+lower"
     ) {
