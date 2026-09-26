@@ -2,10 +2,12 @@ import { PogeyData } from "./pogey";
 import { getPokemonById, getMoveByName } from "./processjson";
 import { shuffle } from "shared";
 import { DEFAULT_MOVES } from "./legalmoves";
+import ELIGIBLE_POKEMON_IDS from "./eligible_pokemon_ids.json";
 
-// National Pokedex number of the latest released pokemon (Gen 9 + Paldea DLC).
-const MAX_POKEMON_ID = 1025;
-
+// Only fully-evolved pokemon, pokemon with no evolution at all, and every
+// legendary/mythical (regardless of their own evolution stage) are drafted —
+// precomputed once from PokeAPI's species + evolution-chain data (see
+// scripts this was generated from) rather than walking evolution chains live.
 export async function generateRandomPokemon(pokemonTeam) {
     const usedIds = new Set(
         pokemonTeam.filter((mon) => mon).map((mon) => mon.id)
@@ -19,7 +21,9 @@ export async function generateRandomPokemon(pokemonTeam) {
 }
 
 export function generateRandomPokemonId() {
-    return Math.floor(Math.random() * MAX_POKEMON_ID) + 1;
+    return ELIGIBLE_POKEMON_IDS[
+        Math.floor(Math.random() * ELIGIBLE_POKEMON_IDS.length)
+    ];
 }
 
 export function getPokemonName(data) {

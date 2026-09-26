@@ -1,9 +1,9 @@
 import { HealthBar } from "components/HealthBar";
 import { StatsDisplay } from "components/StatsDisplay";
 import {
-    capitalizeFirstLetter,
     pokemonNameToString,
     pokemonTypeToString,
+    statNameToString,
 } from "shared";
 import React from "react";
 import "./HoverPokemonData.css";
@@ -28,9 +28,7 @@ export function HoverPokemonData(props) {
             let symbol = level < 0 ? "" : "+";
             stat_levels =
                 stat_levels +
-                capitalizeFirstLetter(
-                    stat_names[i]
-                ) +
+                statNameToString(stat_names[i]) +
                 " (" +
                 symbol +
                 level +

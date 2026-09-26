@@ -1,5 +1,11 @@
 import React, { useState } from "react";
-import { capitalizeFirstLetter, damageCalc, pokemonNameToString } from "shared";
+import {
+    damageClassToString,
+    damageCalc,
+    moveNameToString,
+    pokemonNameToString,
+    typeNameToString,
+} from "shared";
 import "./Move.css";
 
 export function Move(props) {
@@ -40,7 +46,7 @@ export function Move(props) {
         let damage = damageCalc(attack, defend, props.move);
         let percent = Math.round((damage / defend.hp[1]) * 1000) / 10;
         move_text =
-            capitalizeFirstLetter(props.move.name) +
+            moveNameToString(props.move) +
             " (" +
             props.move.power +
             "bp): " +
@@ -54,11 +60,17 @@ export function Move(props) {
     let moveClassName =
         props.moveOwner === "party" ? "party-move" : "move-button";
 
-    let effect_text = props.move.flavor_text_entries.filter((entry) => {
-        if (entry.language === undefined || entry.language.name === undefined)
-            return true;
-        return entry.language.name === "en";
-    })[0].flavor_text;
+    let effect_text = (
+        props.move.flavor_text_entries.find(
+            (entry) => entry.language && entry.language.name === "ko"
+        ) ||
+        props.move.flavor_text_entries.find(
+            (entry) =>
+                entry.language === undefined ||
+                entry.language.name === undefined ||
+                entry.language.name === "en"
+        )
+    ).flavor_text;
 
     if (props.move.meta === undefined) {
         /// temporary error fix
@@ -85,8 +97,8 @@ export function Move(props) {
                         setStyle({ display: "none" });
                     }}
                 >
-                    <p>{capitalizeFirstLetter(props.move.name)}</p>
-                    <p>{capitalizeFirstLetter(props.move.type.name)}</p>
+                    <p>{moveNameToString(props.move)}</p>
+                    <p>{typeNameToString(props.move.type.name)}</p>
                 </button>
             </div>
             <div style={style}>
@@ -105,7 +117,7 @@ export function Move(props) {
                     <p>Power: {props.move.power}</p>
                     <p>
                         Damage Class:{" "}
-                        {capitalizeFirstLetter(props.move.damage_class.name)}
+                        {damageClassToString(props.move.damage_class.name)}
                     </p>
                     <p>Priority: {props.move.priority}</p>
 

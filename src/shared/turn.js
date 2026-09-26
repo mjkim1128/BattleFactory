@@ -1,6 +1,10 @@
 import { makeMove } from "./computermove";
 import { damageCalc, statCalc, typeEffectiveness } from "./damagecalc";
-import { capitalizeFirstLetter, pokemonNameToString } from "./helpers";
+import {
+    moveNameToString,
+    pokemonNameToString,
+    statNameToString,
+} from "./helpers";
 
 export function doTurn(playerPokemon, opponentPokemon, move) {
     let cpuMove = makeMove(playerPokemon, opponentPokemon);
@@ -71,9 +75,9 @@ export function playerTurn(playerPokemon, opponentPokemon, move) {
 
 export function turnText(attacker, defender, move) {
     let text = [
-        capitalizeFirstLetter(attacker.name) +
+        pokemonNameToString(attacker) +
             " used " +
-            capitalizeFirstLetter(move.name) +
+            moveNameToString(move) +
             "!",
     ];
     if (defender.hp[0] <= 0) {
@@ -83,7 +87,7 @@ export function turnText(attacker, defender, move) {
     }
     if (typeEffectiveness(move, defender) === 0) {
         text.push(
-            "It doesnt't affect " + capitalizeFirstLetter(defender.name) + "!"
+            "It doesnt't affect " + pokemonNameToString(defender) + "!"
         );
     }
     if (
@@ -116,7 +120,7 @@ export function doAttack(attacker, defender, move) {
             ? [defender.hp[0] - damage, damage]
             : [0, defender.hp[0]];
     text.push(
-        capitalizeFirstLetter(defender.name) +
+        pokemonNameToString(defender) +
             " lost " +
             Math.round((damage_number / defender.hp[1]) * 1000) / 10 +
             "% HP!"
@@ -148,7 +152,7 @@ export function doAttack(attacker, defender, move) {
             attacker.hp[0] = attacker.hp[0] + hpNumber;
         }
         text.push(
-            capitalizeFirstLetter(attacker.name) +
+            pokemonNameToString(attacker) +
                 " healed " +
                 Math.round((hpNumber / attacker.hp[1]) * 1000) / 10 +
                 "% HP!"
@@ -175,20 +179,20 @@ export function doAttack(attacker, defender, move) {
             attacker.hp[0] = attacker.hp[0] - hpNumber;
         }
         text.push(
-            capitalizeFirstLetter(attacker.name) +
+            pokemonNameToString(attacker) +
                 " lost " +
                 Math.round((hpNumber / attacker.hp[1]) * 1000) / 10 +
                 "% HP to recoil!"
         );
     } else if (move.name === "explosion" || move.name === "self-destruct") {
         attacker.hp[0] = 0;
-        text.push(capitalizeFirstLetter(attacker.name) + " blew up!");
+        text.push(pokemonNameToString(attacker) + " blew up!");
     }
     if (defender.hp[0] === 0) {
-        text.push(capitalizeFirstLetter(defender.name) + " fainted!");
+        text.push(pokemonNameToString(defender) + " fainted!");
     }
     if (attacker.hp[0] === 0) {
-        text.push(capitalizeFirstLetter(attacker.name) + " fainted!");
+        text.push(pokemonNameToString(attacker) + " fainted!");
     }
     return text;
 }
@@ -198,10 +202,10 @@ export function doSwitch(pokemon, index) {
     resetStatChanges(oldCurrent); // Reset stat changes on switch out
     let text = "";
     if (oldCurrent.hp[0] > 0)
-        text = "Switch out " + capitalizeFirstLetter(oldCurrent.name) + "! ";
+        text = "Switch out " + pokemonNameToString(oldCurrent) + "! ";
     pokemon[0] = pokemon[index];
     pokemon[index] = oldCurrent;
-    text = text + "Switch in " + capitalizeFirstLetter(pokemon[0].name) + "!";
+    text = text + "Switch in " + pokemonNameToString(pokemon[0]) + "!";
     resetStatChanges(pokemon); // Reset stat changes on switch in
     return text;
 }
@@ -245,21 +249,21 @@ export function doStatChanges(pokemon, move) {
         text =
             pokemonNameToString(pokemon) +
             " had it's " +
-            capitalizeFirstLetter(stat_names[stat_index]) +
+            statNameToString(stat_names[stat_index]) +
             change;
         if (pokemon.stat_levels[stat_index] < -6) {
             pokemon.stat_levels[stat_index] = -6;
             text =
                 pokemonNameToString(pokemon) +
                 "'s " +
-                capitalizeFirstLetter(stat_names[stat_index]) +
+                statNameToString(stat_names[stat_index]) +
                 " can't go lower!";
         } else if (pokemon.stat_levels[stat_index] > 6) {
             pokemon.stat_levels[stat_index] = 6;
             text =
                 pokemonNameToString(pokemon) +
                 "'s " +
-                capitalizeFirstLetter(stat_names[stat_index]) +
+                statNameToString(stat_names[stat_index]) +
                 " can't go higher!";
         }
         texts.push(text);

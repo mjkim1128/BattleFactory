@@ -5,19 +5,73 @@ export const wait = (ms) =>
         }, ms);
     });
 
+// PokeAPI's own Korean names cover pokemon/moves (fetched live, see processjson.js),
+// but types, damage classes, and stat names are small fixed sets we display from a
+// local table instead of paying an extra request for each one.
+const TYPE_KO = {
+    normal: "노말",
+    fire: "불꽃",
+    water: "물",
+    electric: "전기",
+    grass: "풀",
+    ice: "얼음",
+    fighting: "격투",
+    poison: "독",
+    ground: "땅",
+    flying: "비행",
+    psychic: "에스퍼",
+    bug: "벌레",
+    rock: "바위",
+    ghost: "고스트",
+    dragon: "드래곤",
+    dark: "악",
+    steel: "강철",
+    fairy: "페어리",
+};
+
+const DAMAGE_CLASS_KO = {
+    physical: "물리",
+    special: "특수",
+    status: "변화",
+};
+
+const STAT_KO = {
+    attack: "공격",
+    defense: "방어",
+    "special-attack": "특수공격",
+    "special-defense": "특수방어",
+    speed: "스피드",
+};
+
+export function typeNameToString(typeName) {
+    return TYPE_KO[typeName] || capitalizeFirstLetter(typeName);
+}
+
+export function damageClassToString(damageClassName) {
+    return DAMAGE_CLASS_KO[damageClassName] || capitalizeFirstLetter(damageClassName);
+}
+
+export function statNameToString(statName) {
+    return STAT_KO[statName] || capitalizeFirstLetter(statName);
+}
+
 export function pokemonTypeToString(pokemon) {
     let types = "";
     for (let i = 0; i < pokemon.types.length; i++) {
         types =
             types +
-            capitalizeFirstLetter(pokemon.types[i].type.name) +
+            typeNameToString(pokemon.types[i].type.name) +
             (i === 0 && pokemon.types.length > 1 ? "/" : "");
     }
     return types;
 }
 
 export function pokemonNameToString(pokemon) {
-    return capitalizeFirstLetter(pokemon.name);
+    return pokemon.korean_name || capitalizeFirstLetter(pokemon.name);
+}
+
+export function moveNameToString(move) {
+    return move.korean_name || capitalizeFirstLetter(move.name);
 }
 
 export function capitalizeFirstLetter(string) {
