@@ -22,6 +22,7 @@ import {
     COVERT_CLOAK,
     METRONOME_ITEM,
     CHOICE_ITEMS,
+    UNREMOVABLE_ITEMS,
 } from "./iteminfo";
 
 function hasCustapBoost(pokemon) {
@@ -30,6 +31,39 @@ function hasCustapBoost(pokemon) {
         pokemon.item.name === CUSTAP_BERRY &&
         pokemon.hp[0] / pokemon.hp[1] <= 0.25
     );
+}
+
+// Consuming an item (eating a berry, popping a balloon, etc.) stashes it as the pokemon's
+// "last consumed item" instead of just discarding it, so Recycle can restore it later.
+function consumeItem(pokemon) {
+    pokemon.consumedItem = pokemon.item;
+    pokemon.item = null;
+}
+
+function isRemovable(item) {
+    return item && !UNREMOVABLE_ITEMS.has(item.name);
+}
+
+// Applies a berry's "eaten" effect immediately (used by Bug Bite/Pluck stealing the
+// defender's berry), without the HP-fraction gating tryConsumeHpTriggeredItem uses for
+// a berry reacting to its own holder's HP dropping. Takes the berry object directly
+// rather than reading pokemon.item, since the eater usually never held this berry.
+function applyBerryEffect(pokemon, berry, text) {
+    const name = berry.name;
+    const label = berry.korean_name || berry.name;
+    let healAmount = 0;
+    if (name === BERRY_JUICE) healAmount = 20;
+    else if (name === "sitrus-berry") healAmount = Math.floor(pokemon.hp[1] / 4);
+    else if (HP_HEAL_BERRIES.has(name)) healAmount = Math.floor(pokemon.hp[1] / 3);
+    if (healAmount > 0 && pokemon.hp[0] < pokemon.hp[1]) {
+        pokemon.hp[0] = Math.min(pokemon.hp[1], pokemon.hp[0] + healAmount);
+        text.push(pokemonNameToString(pokemon) + " ate the " + label + " and restored HP!");
+        return;
+    }
+    const statIndex = STAT_BOOST_BERRIES[name];
+    if (statIndex !== undefined) {
+        addArrayToArray(text, doStatChangesRaw(pokemon, [{ statIndex, change: 1 }]));
+    }
 }
 
 export function doTurn(playerPokemon, opponentPokemon, move) {
@@ -52,25 +86,25 @@ export function doTurn(playerPokemon, opponentPokemon, move) {
     }
     let text = [];
     if (movefirst) {
-        if (hasCustapBoost(playerPokemon[0])) playerPokemon[0].item = null;
+        if (hasCustapBoost(playerPokemon[0])) consumeItem(playerPokemon[0]);
         text = addArrayToArray(
             text,
             playerTurn(playerPokemon, opponentPokemon, move)
         );
         if (opponentPokemon[0].hp[0] <= 0) return text;
-        if (hasCustapBoost(opponentPokemon[0])) opponentPokemon[0].item = null;
+        if (hasCustapBoost(opponentPokemon[0])) consumeItem(opponentPokemon[0]);
         text = addArrayToArray(
             text,
             playerTurn(opponentPokemon, playerPokemon, cpuMove)
         );
     } else {
-        if (hasCustapBoost(opponentPokemon[0])) opponentPokemon[0].item = null;
+        if (hasCustapBoost(opponentPokemon[0])) consumeItem(opponentPokemon[0]);
         text = addArrayToArray(
             text,
             playerTurn(opponentPokemon, playerPokemon, cpuMove)
         );
         if (playerPokemon[0].hp[0] <= 0) return text;
-        if (hasCustapBoost(playerPokemon[0])) playerPokemon[0].item = null;
+        if (hasCustapBoost(playerPokemon[0])) consumeItem(playerPokemon[0]);
         text = addArrayToArray(
             text,
             playerTurn(playerPokemon, opponentPokemon, move)
@@ -183,19 +217,19 @@ function tryConsumeHpTriggeredItem(pokemon, text) {
     if (name === BERRY_JUICE && fraction < 0.5) {
         const msg = healPercent(pokemon, 20, " restored 20 HP using its ");
         if (msg) text.push(msg);
-        pokemon.item = null;
+        consumeItem(pokemon);
         return;
     }
     if (name === "sitrus-berry" && fraction <= 0.5) {
         const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 4), " ate its ");
         if (msg) text.push(msg + " and restored HP!");
-        pokemon.item = null;
+        consumeItem(pokemon);
         return;
     }
     if (HP_HEAL_BERRIES.has(name) && name !== "sitrus-berry" && fraction <= 0.25) {
         const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 3), " ate its ");
         if (msg) text.push(msg + " and restored HP!");
-        pokemon.item = null;
+        consumeItem(pokemon);
         return;
     }
     const statIndex = STAT_BOOST_BERRIES[name];
@@ -205,13 +239,80 @@ function tryConsumeHpTriggeredItem(pokemon, text) {
             doStatChangesRaw(pokemon, [{ statIndex, change: 1 }])
         );
         text.push(pokemonNameToString(pokemon) + " ate its " + itemLabel(pokemon) + "!");
-        pokemon.item = null;
+        consumeItem(pokemon);
     }
+}
+
+// Item-swap/removal moves that either don't deal damage at all, or whose only extra
+// effect (beyond normal damage) is on the target's item. Handled up front so the rest
+// of doAttack's damage pipeline only runs for the moves that still need it.
+function tryItemMove(attacker, defender, move, text) {
+    if (move.name === "trick" || move.name === "switcheroo") {
+        if (
+            (attacker.item && !isRemovable(attacker.item)) ||
+            (defender.item && !isRemovable(defender.item))
+        ) {
+            text.push("But it failed!"); // an unremovable item (e.g. Soul Dew) can't be swapped
+            return true;
+        }
+        const temp = attacker.item;
+        attacker.item = defender.item;
+        defender.item = temp;
+        text.push(
+            pokemonNameToString(attacker) + " switched items with " + pokemonNameToString(defender) + " using " + moveNameToString(move) + "!"
+        );
+        return true;
+    }
+    if (move.name === "corrosive-gas") {
+        if (isRemovable(defender.item)) {
+            text.push(pokemonNameToString(defender) + "'s " + itemLabel(defender) + " was destroyed!");
+            consumeItem(defender);
+        } else {
+            text.push("But it failed!");
+        }
+        return true;
+    }
+    if (move.name === "bestow") {
+        if (!defender.item && attacker.item) {
+            text.push(pokemonNameToString(attacker) + " gave its " + itemLabel(attacker) + " to " + pokemonNameToString(defender) + "!");
+            defender.item = attacker.item;
+            attacker.item = null;
+        } else {
+            text.push("But it failed!");
+        }
+        return true;
+    }
+    if (move.name === "recycle") {
+        if (!attacker.item && attacker.consumedItem) {
+            text.push(pokemonNameToString(attacker) + " recycled its " + (attacker.consumedItem.korean_name || attacker.consumedItem.name) + "!");
+            attacker.item = attacker.consumedItem;
+            attacker.consumedItem = null;
+        } else {
+            text.push("But it failed!");
+        }
+        return true;
+    }
+    return false;
 }
 
 export function doAttack(attacker, defender, move) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
+
+    // Non-damaging item-swap/removal moves (Trick, Switcheroo, Corrosive Gas, Bestow, Recycle)
+    if (tryItemMove(attacker, defender, move, text)) return text;
+
+    // Poltergeist: fails outright if the target has no item
+    if (move.name === "poltergeist" && !defender.item) {
+        text.push("But it failed!");
+        return text;
+    }
+    // Fling: fails if the attacker has nothing to throw
+    if (move.name === "fling" && !attacker.item) {
+        text.push("But it failed!");
+        return text;
+    }
+
     let damage = damageCalc(attacker, defender, move);
     const typeEff = typeEffectiveness(move, defender);
 
@@ -228,7 +329,7 @@ export function doAttack(attacker, defender, move) {
                 itemLabel(defender) +
                 " weakened the hit!"
         );
-        defender.item = null;
+        consumeItem(defender);
     }
 
     // Focus Sash: survive a would-be KO from full HP with 1 HP, then is consumed
@@ -258,13 +359,13 @@ export function doAttack(attacker, defender, move) {
         text.push(
             pokemonNameToString(defender) + " hung on using its " + itemLabel(defender) + "!"
         );
-        defender.item = null;
+        consumeItem(defender);
     }
 
     // Air Balloon: pops the moment the holder takes any damage (ground hits never reach here, see typeEffectiveness)
     if (defender.item && defender.item.name === AIR_BALLOON && damage_number > 0) {
         text.push(pokemonNameToString(defender) + "'s Balloon popped!");
-        defender.item = null;
+        consumeItem(defender);
     }
 
     // Weakness Policy: +2 Atk/SpA when hit by a super-effective move
@@ -281,7 +382,7 @@ export function doAttack(attacker, defender, move) {
                 { statIndex: 2, change: 2 },
             ])
         );
-        defender.item = null;
+        consumeItem(defender);
     }
 
     // Kee Berry: +1 Defense when hit by a physical move
@@ -292,7 +393,54 @@ export function doAttack(attacker, defender, move) {
         defender.hp[0] > 0
     ) {
         addArrayToArray(text, doStatChangesRaw(defender, [{ statIndex: 1, change: 1 }]));
+        consumeItem(defender);
+    }
+
+    // Knock Off: knocks the defender's item away after the hit (unless it's unremovable)
+    if (move.name === "knock-off" && isRemovable(defender.item) && damage_number > 0) {
+        text.push(pokemonNameToString(defender) + " lost its " + itemLabel(defender) + "!");
+        consumeItem(defender);
+    }
+
+    // Thief: steals the defender's item if the attacker isn't already holding one
+    if (
+        move.name === "thief" &&
+        !attacker.item &&
+        isRemovable(defender.item) &&
+        damage_number > 0
+    ) {
+        text.push(
+            pokemonNameToString(attacker) + " stole " + pokemonNameToString(defender) + "'s " + itemLabel(defender) + "!"
+        );
+        attacker.item = defender.item;
         defender.item = null;
+    }
+
+    // Incinerate: burns up the defender's Berry after the hit (no effect triggers, it's just gone)
+    if (
+        move.name === "incinerate" &&
+        defender.item &&
+        defender.item.name.endsWith("-berry") &&
+        damage_number > 0
+    ) {
+        text.push(pokemonNameToString(defender) + "'s " + itemLabel(defender) + " was burnt up!");
+        consumeItem(defender);
+    }
+
+    // Bug Bite / Pluck: eats the defender's Berry immediately for its effect
+    if (
+        (move.name === "bug-bite" || move.name === "pluck") &&
+        defender.item &&
+        defender.item.name.endsWith("-berry") &&
+        damage_number > 0 &&
+        attacker.hp[0] > 0
+    ) {
+        const stolenBerry = defender.item;
+        text.push(
+            pokemonNameToString(attacker) + " stole and ate " + pokemonNameToString(defender) + "'s " + itemLabel(defender) + "!"
+        );
+        consumeItem(defender);
+        applyBerryEffect(attacker, stolenBerry, text);
     }
 
     if (
@@ -370,6 +518,9 @@ export function doAttack(attacker, defender, move) {
         text.push(pokemonNameToString(attacker) + " was hurt by its Life Orb!");
     }
 
+    // Fling: whatever was thrown is gone after use
+    if (move.name === "fling" && attacker.item) consumeItem(attacker);
+
     if (defender.hp[0] === 0) {
         text.push(pokemonNameToString(defender) + " fainted!");
     }
@@ -433,7 +584,7 @@ function tryConsumeWhiteHerb(pokemon, text) {
     if (pokemon.stat_levels.some((level) => level < 0)) {
         pokemon.stat_levels = pokemon.stat_levels.map((level) => Math.max(level, 0));
         text.push(pokemonNameToString(pokemon) + " restored its stats using its White Herb!");
-        pokemon.item = null;
+        consumeItem(pokemon);
     }
 }
 

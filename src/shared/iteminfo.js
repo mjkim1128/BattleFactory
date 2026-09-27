@@ -127,8 +127,57 @@ export const ASSAULT_VEST = "assault-vest";
 export const IRON_BALL = "iron-ball";
 export const COVERT_CLOAK = "covert-cloak";
 export const METRONOME_ITEM = "metronome";
+export const SOUL_DEW = "soul-dew";
 export const CHOICE_ITEMS = {
     "choice-band": 1, // attack
     "choice-specs": 3, // special attack
     "choice-scarf": 5, // speed
 };
+
+// Items that can't be removed/stolen/traded/thrown at all (Knock Off, Thief, Trick,
+// Switcheroo, Bestow, Corrosive Gas, Fling all fail against/with these). Real games
+// also protect Mega Stones/Z-Crystals/Plates/Drives/orbs this way, but none of those
+// are in ITEM_POOL, so Soul Dew is the only one that matters here.
+export const UNREMOVABLE_ITEMS = new Set([SOUL_DEW]);
+
+// Real Fling base power per item (Bulbapedia's Fling power list); best-effort for the
+// items in ITEM_POOL specifically. Falls back to 30 for an unlisted general item, since
+// that's the most common value, and every berry is 10 (the standard berry Fling power).
+export const FLING_POWER = {
+    leftovers: 10,
+    "choice-scarf": 10,
+    eviolite: 40,
+    "choice-specs": 10,
+    "choice-band": 10,
+    "focus-sash": 10,
+    "assault-vest": 10,
+    "black-sludge": 30,
+    "air-balloon": 10,
+    "berry-juice": 30,
+    "expert-belt": 10,
+    "black-glasses": 30,
+    "weakness-policy": 10,
+    "white-herb": 10,
+    "thick-club": 90,
+    "spell-tag": 30,
+    "silk-scarf": 10,
+    "covert-cloak": 10,
+    magnet: 30,
+    metronome: 30,
+    "metal-coat": 30,
+    "never-melt-ice": 30,
+    "soft-sand": 10,
+    "mystic-water": 30,
+    "sharp-beak": 30,
+    "dragon-fang": 70,
+    charcoal: 30,
+    "iron-ball": 130,
+    "twisted-spoon": 30,
+    "poison-barb": 70,
+    "muscle-band": 10,
+    "life-orb": 30,
+};
+export function getFlingPower(itemName) {
+    if (itemName.endsWith("-berry")) return 10;
+    return FLING_POWER[itemName] !== undefined ? FLING_POWER[itemName] : 30;
+}

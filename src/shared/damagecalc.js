@@ -8,9 +8,24 @@ import {
     LIFE_ORB,
     AIR_BALLOON,
     METRONOME_ITEM,
+    UNREMOVABLE_ITEMS,
+    getFlingPower,
 } from "./iteminfo";
 
+// Moves whose whole effect is item-swapping/removal. In the real games these aren't
+// blocked by type immunity at all (unlike e.g. Thunder Wave vs Ground or Toxic vs
+// Poison/Steel), but our type chart is applied to every move regardless of category,
+// so without this they'd silently "fail" against, say, a Dark-type target for Trick.
+const TYPE_IMMUNE_EXEMPT_MOVES = new Set([
+    "trick",
+    "switcheroo",
+    "bestow",
+    "recycle",
+    "corrosive-gas",
+]);
+
 export function typeEffectiveness(move, defender) {
+    if (TYPE_IMMUNE_EXEMPT_MOVES.has(move.name)) return 1;
     if (
         move.type.name === "ground" &&
         defender.item &&
@@ -55,6 +70,12 @@ export function damageCalc(attacker, defender, move) {
     attack = statCalc(attack, attack_level);
     defense = statCalc(defense, defense_level);
     let power = move.priority < 0 ? move.power * 2 : move.power; // Double power of negative priority moves
+
+    // Fling: power comes from whatever the attacker is holding, not the move's own base power
+    if (move.name === "fling" && attacker.item) power = getFlingPower(attacker.item.name);
+    // Knock Off: 1.5x if the defender holds an item that can actually be knocked off
+    if (move.name === "knock-off" && defender.item && !UNREMOVABLE_ITEMS.has(defender.item.name))
+        power *= 1.5;
 
     if (attacker.item) {
         const boostedType = TYPE_BOOST_ITEMS[attacker.item.name];
