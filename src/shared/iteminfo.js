@@ -1,8 +1,9 @@
 // Items this game actually gives real battle effects to. Left out on purpose: anything
 // that only matters with a system this engine doesn't have (status conditions, entry
-// hazards, screens, weather, contact/trapping, accuracy/crit rolls, multi-hit moves,
-// two-turn moves, sound-move flags). Those items exist in the Pokedex/UI but were kept
-// out of ITEM_POOL so nothing gets handed out that would silently do nothing.
+// hazards, weather, accuracy/crit rolls, multi-hit moves, two-turn moves, sound-move
+// flags). Those items exist in the Pokedex/UI but were kept out of ITEM_POOL so nothing
+// gets handed out that would silently do nothing. (Status conditions and contact
+// detection now exist, so their items were added back in.)
 export const ITEM_POOL = [
     // General held items
     "leftovers",
@@ -38,6 +39,8 @@ export const ITEM_POOL = [
     "poison-barb",
     "muscle-band",
     "life-orb",
+    "rocky-helmet",
+    "sticky-barb",
     // Berries
     "colbur-berry",
     "shuca-berry",
@@ -128,6 +131,8 @@ export const IRON_BALL = "iron-ball";
 export const COVERT_CLOAK = "covert-cloak";
 export const METRONOME_ITEM = "metronome";
 export const SOUL_DEW = "soul-dew";
+export const ROCKY_HELMET = "rocky-helmet";
+export const STICKY_BARB = "sticky-barb";
 export const CHOICE_ITEMS = {
     "choice-band": 1, // attack
     "choice-specs": 3, // special attack
@@ -176,6 +181,8 @@ export const FLING_POWER = {
     "poison-barb": 70,
     "muscle-band": 10,
     "life-orb": 30,
+    "rocky-helmet": 60,
+    "sticky-barb": 80,
 };
 export function getFlingPower(itemName) {
     if (itemName.endsWith("-berry")) return 10;

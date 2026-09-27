@@ -5,6 +5,7 @@ import {
     pokemonNameToString,
     statNameToString,
 } from "./helpers";
+import { CONTACT_MOVES } from "./legalmoves";
 import {
     RESIST_BERRIES,
     STAT_BOOST_BERRIES,
@@ -23,6 +24,8 @@ import {
     METRONOME_ITEM,
     CHOICE_ITEMS,
     UNREMOVABLE_ITEMS,
+    ROCKY_HELMET,
+    STICKY_BARB,
 } from "./iteminfo";
 
 function hasCustapBoost(pokemon) {
@@ -114,6 +117,10 @@ export function doTurn(playerPokemon, opponentPokemon, move) {
     }
     text = addArrayToArray(text, doEndOfTurn(playerPokemon[0]));
     text = addArrayToArray(text, doEndOfTurn(opponentPokemon[0]));
+    if (playerPokemon.reflectTurns > 0) playerPokemon.reflectTurns -= 1;
+    if (playerPokemon.lightScreenTurns > 0) playerPokemon.lightScreenTurns -= 1;
+    if (opponentPokemon.reflectTurns > 0) opponentPokemon.reflectTurns -= 1;
+    if (opponentPokemon.lightScreenTurns > 0) opponentPokemon.lightScreenTurns -= 1;
     return text;
 }
 
@@ -128,6 +135,8 @@ export function playerTurn(playerPokemon, opponentPokemon, move) {
     const attacker = playerPokemon[0];
     if (!canAct(attacker, text)) return text;
 
+    if (trySetupScreen(playerPokemon, move, text)) return text;
+
     text = addArrayToArray(
         text,
         turnText(attacker, opponentPokemon[0], move)
@@ -135,7 +144,7 @@ export function playerTurn(playerPokemon, opponentPokemon, move) {
     if (typeEffectiveness(move, opponentPokemon[0]) !== 0) {
         text = addArrayToArray(
             text,
-            doAttack(attacker, opponentPokemon[0], move)
+            doAttack(attacker, opponentPokemon[0], move, opponentPokemon)
         );
         trackMetronome(attacker, move);
         if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
@@ -197,6 +206,19 @@ function canAct(attacker, text) {
         text.push(pokemonNameToString(attacker) + " is paralyzed! It can't move!");
         return false;
     }
+    return true;
+}
+
+// Reflect/Light Screen are side-wide, not per-pokemon, so their turn counters live
+// directly on the team array (attackingTeam) rather than on a pokemon object — the
+// team arrays are already threaded through doTurn/playerTurn everywhere.
+function trySetupScreen(attackingTeam, move, text) {
+    if (move.name !== "reflect" && move.name !== "light-screen") return false;
+    if (move.name === "reflect") attackingTeam.reflectTurns = 5;
+    else attackingTeam.lightScreenTurns = 5;
+    text.push(
+        pokemonNameToString(attackingTeam[0]) + " set up " + moveNameToString(move) + "!"
+    );
     return true;
 }
 
@@ -350,7 +372,7 @@ function tryItemMove(attacker, defender, move, text) {
     return false;
 }
 
-export function doAttack(attacker, defender, move) {
+export function doAttack(attacker, defender, move, defenderTeam) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
 
@@ -370,6 +392,15 @@ export function doAttack(attacker, defender, move) {
 
     let damage = damageCalc(attacker, defender, move);
     const typeEff = typeEffectiveness(move, defender);
+
+    // Reflect/Light Screen: halve incoming damage of the matching category for the
+    // defending side while their screen is still up.
+    if (defenderTeam) {
+        if (move.damage_class.name === "physical" && defenderTeam.reflectTurns > 0)
+            damage = Math.floor(damage / 2);
+        else if (move.damage_class.name === "special" && defenderTeam.lightScreenTurns > 0)
+            damage = Math.floor(damage / 2);
+    }
 
     // Resist berry: halves a super-effective hit of the matching type, then is eaten
     if (
@@ -449,6 +480,32 @@ export function doAttack(attacker, defender, move) {
     ) {
         addArrayToArray(text, doStatChangesRaw(defender, [{ statIndex: 1, change: 1 }]));
         consumeItem(defender);
+    }
+
+    // Rocky Helmet: contact against the holder costs the attacker 1/6 max HP
+    if (
+        CONTACT_MOVES.has(move.name) &&
+        defender.item &&
+        defender.item.name === ROCKY_HELMET &&
+        damage_number > 0 &&
+        attacker.hp[0] > 0
+    ) {
+        attacker.hp[0] = Math.max(0, attacker.hp[0] - Math.floor(attacker.hp[1] / 6));
+        text.push(pokemonNameToString(attacker) + " was hurt by Rocky Helmet!");
+        if (attacker.hp[0] === 0) text.push(pokemonNameToString(attacker) + " fainted!");
+    }
+
+    // Sticky Barb: contact against the holder transfers it to the attacker (if it has none)
+    if (
+        CONTACT_MOVES.has(move.name) &&
+        defender.item &&
+        defender.item.name === STICKY_BARB &&
+        damage_number > 0 &&
+        !attacker.item
+    ) {
+        text.push(pokemonNameToString(defender) + "'s Sticky Barb attached to " + pokemonNameToString(attacker) + "!");
+        attacker.item = defender.item;
+        defender.item = null;
     }
 
     // Knock Off: knocks the defender's item away after the hit (unless it's unremovable)
@@ -763,6 +820,10 @@ function doEndOfTurn(pokemon) {
                 text.push(pokemonNameToString(pokemon) + " was hurt by its Black Sludge!");
                 if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
             }
+        } else if (pokemon.item.name === STICKY_BARB) {
+            pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
+            text.push(pokemonNameToString(pokemon) + " was hurt by its Sticky Barb!");
+            if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
         }
     }
     if (pokemon.hp[0] > 0) tryConsumeHpTriggeredItem(pokemon, text);
