@@ -4,6 +4,7 @@ import { shuffle } from "shared";
 import { DEFAULT_MOVES } from "./legalmoves";
 import { ITEM_POOL, SPECIES_EXCLUSIVE_ITEMS } from "./iteminfo";
 import ELIGIBLE_POKEMON_IDS from "./eligible_pokemon_ids.json";
+import SPECIES_FACTORY_SETS from "./species_factory_sets.json";
 
 export async function generateRandomItem(pokemonName) {
     const choices = shuffle([...ITEM_POOL]);
@@ -13,6 +14,34 @@ export async function generateRandomItem(pokemonName) {
         return await getItemByName(itemName);
     }
     return await getItemByName(choices[0]);
+}
+
+// Real competitive sets (item + moves) mined from Pokemon Showdown's Gen6-9
+// "Battle Factory" random-battle format data, restricted to species in our
+// pool and to items/moves this engine actually implements. Picking one whole
+// set (rather than an item and a moveset independently) keeps them thematically
+// consistent, e.g. a Choice Scarf set actually gets that mon's real fast-attacker
+// moves instead of a random unrelated kit.
+export function pickFactorySet(pokemonName) {
+    const sets = SPECIES_FACTORY_SETS[pokemonName];
+    if (!sets || sets.length === 0) return null;
+    return sets[Math.floor(Math.random() * sets.length)];
+}
+
+// Resolves a factory set's move slots (each an array of real alternatives,
+// e.g. ["Knock Off", "Foul Play"]) down to one concrete move per slot,
+// skipping duplicates if two slots happen to resolve to the same move.
+export function resolveFactoryMoveSlugs(factorySet) {
+    const chosen = [];
+    const usedSlugs = new Set();
+    for (const slot of factorySet.moves) {
+        const pick = shuffle([...slot]).find((opt) => !usedSlugs.has(opt.slug));
+        if (pick) {
+            chosen.push(pick);
+            usedSlugs.add(pick.slug);
+        }
+    }
+    return chosen;
 }
 
 // Only fully-evolved pokemon, pokemon with no evolution at all, and every

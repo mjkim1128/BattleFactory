@@ -6,6 +6,7 @@ import {
     generateRandomItem,
     getGoodRandomMoveset,
     getMoveByName,
+    getItemByName,
     getPokemonByName,
     getRandomInt,
     getRandomType,
@@ -15,6 +16,8 @@ import {
     hpCalc,
     BANNED_MOVES,
     DEFAULT_MOVES,
+    pickFactorySet,
+    resolveFactoryMoveSlugs,
 } from "shared";
 
 const BATTLE_ROUNDS = 4;
@@ -103,7 +106,14 @@ export function Home() {
             hpCalc(pokemonData[i].base_stats[0]),
         ];
         pokemonData[i].stat_levels = Array(5).fill(0);
-        pokemonData[i].item = await generateRandomItem(pokemonData[i].name);
+        /// Try a real Showdown "Battle Factory" set first, so item + moveset come
+        /// from the same coherent competitive set instead of two unrelated random picks.
+        const factorySet = pickFactorySet(pokemonData[i].name);
+        pokemonData[i].factorySet = factorySet;
+        pokemonData[i].item =
+            factorySet && factorySet.item
+                ? await getItemByName(factorySet.item)
+                : await generateRandomItem(pokemonData[i].name);
         pokemonData[i].lockedMove = null;
         pokemonData[i].lastMoveName = null;
         pokemonData[i].moveRepeatCount = 0;
@@ -113,6 +123,74 @@ export function Home() {
     async function createRandomMoveset(pokemonArr, index, setFunc) {
         let moves = [];
         let pokemon = pokemonArr[index];
+
+        /// If a real Showdown "Battle Factory" set was picked for this mon (see getPokemonData),
+        /// try to use ITS actual moves first instead of the fully-random diversity pick below.
+        if (pokemon.factorySet) {
+            let newMoves = await Promise.all(
+                pokemonArr[index].moves.map((move) => getMoveByName(move.move.name))
+            );
+            pokemonArr[index].moves_data = newMoves;
+            const learnableSlugs = new Set(newMoves.map((m) => m.name));
+            const chosen = resolveFactoryMoveSlugs(pokemon.factorySet).filter(
+                (c) => c.slug === "hidden-power" || learnableSlugs.has(c.slug)
+            );
+            if (chosen.length >= 2) {
+                let moveset = await Promise.all(
+                    chosen.map((c) => getMoveByName(c.slug))
+                );
+                moveset.forEach((m, idx) => {
+                    if (chosen[idx].hpType) m.hpTypeHint = chosen[idx].hpType;
+                });
+                if (moveset.length < 4) {
+                    let padChoices = shuffle(
+                        newMoves.filter(
+                            (m) =>
+                                BANNED_MOVES.includes(m.name) === false &&
+                                !moveset.some((mm) => mm.name === m.name)
+                        )
+                    );
+                    moveset = [...moveset, ...padChoices].slice(0, 4);
+                }
+                if (moveset.length < 4) {
+                    let padDefaults = shuffle(
+                        await Promise.all(
+                            DEFAULT_MOVES.map((m) => getMoveByName(m.name))
+                        )
+                    ).filter((m) => !moveset.some((mm) => mm.name === m.name));
+                    moveset = [...moveset, ...padDefaults].slice(0, 4);
+                }
+                for (let move of moveset) {
+                    if (move.name === "hidden-power" || move.name === "secret-power") {
+                        move.type.name = move.hpTypeHint || getRandomType();
+                        move.power = 80;
+                    } else if (
+                        move.name === "explosion" ||
+                        move.name === "self-destruct"
+                    ) {
+                        // Do nothing
+                    } else if (move.meta && move.meta.drain < 0)
+                        move.power =
+                            move.power > 120 || move.name === "volt-tackle" ? 150 : 120;
+                    else if (
+                        move.meta &&
+                        move.priority === 0 &&
+                        move.meta.stat_chance !== 100
+                    ) {
+                        if (move.power < 75) move.power = 75;
+                        if (move.power > 95) move.power = 95;
+                        else if (move.name === "tri-attack")
+                            move.type.name = ["fire", "electric", "ice"][
+                                getRandomInt(3)
+                            ];
+                    }
+                }
+                pokemonArr[index].moveset = moveset;
+                setFunc(pokemonArr);
+                return;
+            }
+        }
+
         /// Determine whether pokemon should use physical, special, or both categories of moves
         let diff = Math.abs(pokemon.base_stats[1] - pokemon.base_stats[3]);
         let attack =
