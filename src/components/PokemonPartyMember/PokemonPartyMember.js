@@ -18,7 +18,7 @@ export function PokemonPartyMember(props) {
                 className={props.pokemon.hp[0] <= 0 ? "disabledButton" : ""}
                 disabled={props.pokemon.hp[0] === 0}
                 onClick={() => {
-                    props.onClick(props.index);
+                    if (props.onClick) props.onClick(props.index);
                 }}
             >
                 <img
