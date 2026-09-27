@@ -69,6 +69,11 @@ export function damageCalc(attacker, defender, move) {
 
     attack = statCalc(attack, attack_level);
     defense = statCalc(defense, defense_level);
+
+    // Burn: halves the attack stat used by physical moves
+    if (attacker.status && attacker.status.name === "burn" && category === "physical")
+        attack = Math.floor(attack / 2);
+
     let power = move.priority < 0 ? move.power * 2 : move.power; // Double power of negative priority moves
 
     // Fling: power comes from whatever the attacker is holding, not the move's own base power

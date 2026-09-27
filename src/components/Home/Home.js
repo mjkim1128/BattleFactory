@@ -117,6 +117,8 @@ export function Home() {
         pokemonData[i].lockedMove = null;
         pokemonData[i].lastMoveName = null;
         pokemonData[i].moveRepeatCount = 0;
+        pokemonData[i].status = null; // 무상태
+        pokemonData[i].confusion = null; // 무혼란
         setFunc(pokemonData);
     }
 

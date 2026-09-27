@@ -66,6 +66,15 @@ function applyBerryEffect(pokemon, berry, text) {
     }
 }
 
+// Speed used for turn-order only: applies stat stage, Choice Scarf's 1.5x, and
+// paralysis's 0.5x (modern-gen value; older gens used 0.25x).
+function getEffectiveSpeed(pokemon) {
+    let speed = statCalc(pokemon.base_stats[5], pokemon.stat_levels[4]);
+    if (pokemon.item && pokemon.item.name === "choice-scarf") speed = Math.floor(speed * 1.5);
+    if (pokemon.status && pokemon.status.name === "paralysis") speed = Math.floor(speed / 2);
+    return speed;
+}
+
 export function doTurn(playerPokemon, opponentPokemon, move) {
     let cpuMove = makeMove(playerPokemon, opponentPokemon);
     let playerPriority = move.priority + (hasCustapBoost(playerPokemon[0]) ? 1 : 0);
@@ -73,14 +82,7 @@ export function doTurn(playerPokemon, opponentPokemon, move) {
     let movefirst = playerPriority > cpuPriority ? true : false;
     if (playerPriority === cpuPriority) {
         movefirst =
-            statCalc(
-                playerPokemon[0].base_stats[5],
-                playerPokemon[0].stat_levels[4]
-            ) >
-            statCalc(
-                opponentPokemon[0].base_stats[5],
-                opponentPokemon[0].stat_levels[4]
-            )
+            getEffectiveSpeed(playerPokemon[0]) > getEffectiveSpeed(opponentPokemon[0])
                 ? true
                 : false;
     }
@@ -118,31 +120,84 @@ export function doTurn(playerPokemon, opponentPokemon, move) {
 export function playerTurn(playerPokemon, opponentPokemon, move) {
     let text = [];
     /// Move is switch
-    if (move.priority === 6) text.push(doSwitch(playerPokemon, move.index));
+    if (move.priority === 6) {
+        text.push(doSwitch(playerPokemon, move.index));
+        return text;
+    }
     /// Move is attack
-    else {
-        const attacker = playerPokemon[0];
+    const attacker = playerPokemon[0];
+    if (!canAct(attacker, text)) return text;
+
+    text = addArrayToArray(
+        text,
+        turnText(attacker, opponentPokemon[0], move)
+    );
+    if (typeEffectiveness(move, opponentPokemon[0]) !== 0) {
         text = addArrayToArray(
             text,
-            turnText(attacker, opponentPokemon[0], move)
+            doAttack(attacker, opponentPokemon[0], move)
         );
-        if (typeEffectiveness(move, opponentPokemon[0]) !== 0) {
+        trackMetronome(attacker, move);
+        if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
+            attacker.lockedMove = move.name;
+        /// temporary fix for moves giving me errors
+        if (move.meta !== undefined)
             text = addArrayToArray(
                 text,
-                doAttack(attacker, opponentPokemon[0], move)
+                doMoveEffects(attacker, opponentPokemon[0], move)
             );
-            trackMetronome(attacker, move);
-            if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
-                attacker.lockedMove = move.name;
-            /// temporary fix for moves giving me errors
-            if (move.meta !== undefined)
-                text = addArrayToArray(
-                    text,
-                    doMoveEffects(attacker, opponentPokemon[0], move)
-                );
-        }
     }
     return text;
+}
+
+// Typeless physical hit a confused pokemon deals to itself (fixed 40 power, own atk/def).
+function confusionSelfDamage(pokemon) {
+    const attack = statCalc(pokemon.base_stats[1], pokemon.stat_levels[0]);
+    const defense = statCalc(pokemon.base_stats[2], pokemon.stat_levels[1]);
+    return Math.floor((42 * 40 * (attack / defense)) / 50 + 2);
+}
+
+// Sleep/freeze/confusion/paralysis can each stop a pokemon from acting this turn.
+// Returns false (having pushed the reason into `text`) if it can't move.
+function canAct(attacker, text) {
+    if (attacker.status && attacker.status.name === "sleep") {
+        if (attacker.status.counter <= 0) {
+            attacker.status = null;
+            text.push(pokemonNameToString(attacker) + " woke up!");
+        } else {
+            attacker.status.counter -= 1;
+            text.push(pokemonNameToString(attacker) + " is fast asleep.");
+            return false;
+        }
+    }
+    if (attacker.status && attacker.status.name === "freeze") {
+        if (Math.random() < 0.2) {
+            attacker.status = null;
+            text.push(pokemonNameToString(attacker) + " thawed out!");
+        } else {
+            text.push(pokemonNameToString(attacker) + " is frozen solid!");
+            return false;
+        }
+    }
+    if (attacker.confusion) {
+        if (attacker.confusion.counter <= 0) {
+            attacker.confusion = null;
+            text.push(pokemonNameToString(attacker) + " snapped out of confusion!");
+        } else {
+            attacker.confusion.counter -= 1;
+            if (Math.random() < 1 / 3) {
+                attacker.hp[0] = Math.max(0, attacker.hp[0] - confusionSelfDamage(attacker));
+                text.push(pokemonNameToString(attacker) + " is confused! It hurt itself in its confusion!");
+                if (attacker.hp[0] === 0) text.push(pokemonNameToString(attacker) + " fainted!");
+                return false;
+            }
+        }
+    }
+    if (attacker.status && attacker.status.name === "paralysis" && Math.random() < 0.25) {
+        text.push(pokemonNameToString(attacker) + " is paralyzed! It can't move!");
+        return false;
+    }
+    return true;
 }
 
 function trackMetronome(attacker, move) {
@@ -443,6 +498,39 @@ export function doAttack(attacker, defender, move) {
         applyBerryEffect(attacker, stolenBerry, text);
     }
 
+    // Status ailments / confusion (Thunder Wave, Toxic, Confuse Ray, and damage moves
+    // with a secondary ailment chance like Nuzzle). Only one major status at a time;
+    // confusion is tracked separately since it can stack with a major status.
+    if (
+        move.meta &&
+        move.meta.ailment &&
+        move.meta.ailment.name !== "none" &&
+        defender.hp[0] > 0
+    ) {
+        const ailmentName = move.meta.ailment.name;
+        const isGuaranteed = move.meta.category.name === "ailment";
+        const chance = isGuaranteed ? 100 : move.meta.ailment_chance;
+
+        if (ailmentName === "confusion") {
+            if (!defender.confusion && Math.random() * 100 < chance) {
+                defender.confusion = { counter: 2 + Math.floor(Math.random() * 4) };
+                text.push(pokemonNameToString(defender) + " became confused!");
+            }
+        } else if (
+            ["paralysis", "burn", "poison", "toxic", "sleep", "freeze"].includes(ailmentName) &&
+            !defender.status &&
+            Math.random() * 100 < chance
+        ) {
+            defender.status =
+                ailmentName === "sleep"
+                    ? { name: "sleep", counter: 1 + Math.floor(Math.random() * 3) }
+                    : ailmentName === "toxic"
+                    ? { name: "toxic", counter: 1 }
+                    : { name: ailmentName };
+            text.push(pokemonNameToString(defender) + " is now afflicted with " + ailmentName + "!");
+        }
+    }
+
     if (
         attacker.hp[0] < attacker.hp[1] &&
         move.meta &&
@@ -641,19 +729,40 @@ export function resetStatChanges(pokemon) {
 
 function doEndOfTurn(pokemon) {
     let text = [];
-    if (pokemon.hp[0] <= 0 || !pokemon.item) return text;
-    if (pokemon.item.name === LEFTOVERS) {
-        const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
-        if (msg) text.push(msg);
-    } else if (pokemon.item.name === BLACK_SLUDGE) {
-        const isPoison = pokemon.types.some((t) => t.type.name === "poison");
-        if (isPoison) {
+    if (pokemon.hp[0] <= 0) return text;
+
+    if (pokemon.status && pokemon.status.name === "burn") {
+        pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 16));
+        text.push(pokemonNameToString(pokemon) + " is hurt by its burn!");
+        if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+    } else if (pokemon.status && pokemon.status.name === "poison") {
+        pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
+        text.push(pokemonNameToString(pokemon) + " is hurt by poison!");
+        if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+    } else if (pokemon.status && pokemon.status.name === "toxic") {
+        pokemon.hp[0] = Math.max(
+            0,
+            pokemon.hp[0] - Math.floor((pokemon.hp[1] * pokemon.status.counter) / 16)
+        );
+        text.push(pokemonNameToString(pokemon) + " is hurt by poison!");
+        pokemon.status.counter += 1;
+        if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+    }
+
+    if (pokemon.hp[0] > 0 && pokemon.item) {
+        if (pokemon.item.name === LEFTOVERS) {
             const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
             if (msg) text.push(msg);
-        } else {
-            pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
-            text.push(pokemonNameToString(pokemon) + " was hurt by its Black Sludge!");
-            if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+        } else if (pokemon.item.name === BLACK_SLUDGE) {
+            const isPoison = pokemon.types.some((t) => t.type.name === "poison");
+            if (isPoison) {
+                const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
+                if (msg) text.push(msg);
+            } else {
+                pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
+                text.push(pokemonNameToString(pokemon) + " was hurt by its Black Sludge!");
+                if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+            }
         }
     }
     if (pokemon.hp[0] > 0) tryConsumeHpTriggeredItem(pokemon, text);
