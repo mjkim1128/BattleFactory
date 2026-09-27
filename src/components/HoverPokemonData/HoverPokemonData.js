@@ -50,6 +50,18 @@ export function HoverPokemonData(props) {
                 />
             </div>
             <p>Type: {pokemonTypeToString(props.pokemon)}</p>
+            {props.pokemon.item && (
+                <p className="hover-pokemon-item">
+                    {props.pokemon.item.sprites && props.pokemon.item.sprites.default && (
+                        <img
+                            className="hover-pokemon-item-icon"
+                            src={props.pokemon.item.sprites.default}
+                            alt={props.pokemon.item.name}
+                        />
+                    )}
+                    {props.pokemon.item.korean_name || props.pokemon.item.name}
+                </p>
+            )}
             {/* <p>Abilities: {abilities}</p>
             <p>Weight: {props.pokemon.weight}</p> */}
             <StatsDisplay pokemon={props.pokemon} />

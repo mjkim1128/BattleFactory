@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import {
     baseStatTotalTo600,
     generateRandomPokemon,
+    generateRandomItem,
     getGoodRandomMoveset,
     getMoveByName,
     getPokemonByName,
@@ -79,7 +80,7 @@ export function Home() {
                     opponentPokemon[i] = await getPokemonByName(
                         TRAINER_BLAKE.pokemon[i]
                     );
-                getPokemonData(opponentPokemon, i, setOpponentPokemon);
+                await getPokemonData(opponentPokemon, i, setOpponentPokemon);
                 await createRandomMoveset(opponentPokemon, i, setOpponentPokemon);
                 setOpponentPokemon(opponentPokemon);
             }
@@ -89,12 +90,12 @@ export function Home() {
 
     async function randomNewPokemon(pokemonData, i, setFunc) {
         pokemonData[i] = await generateRandomPokemon(pokemonData);
-        getPokemonData(pokemonData, i, setFunc);
+        await getPokemonData(pokemonData, i, setFunc);
         await createRandomMoveset(pokemonData, i, setFunc);
         setFunc(pokemonData);
     }
 
-    function getPokemonData(pokemonData, i, setFunc) {
+    async function getPokemonData(pokemonData, i, setFunc) {
         pokemonData[i].base_stats = baseStatTotalTo600(pokemonData[i]);
         pokemonData[i].moveset = [{ name: "Tackle" }];
         pokemonData[i].hp = [
@@ -102,6 +103,10 @@ export function Home() {
             hpCalc(pokemonData[i].base_stats[0]),
         ];
         pokemonData[i].stat_levels = Array(5).fill(0);
+        pokemonData[i].item = await generateRandomItem(pokemonData[i].name);
+        pokemonData[i].lockedMove = null;
+        pokemonData[i].lastMoveName = null;
+        pokemonData[i].moveRepeatCount = 0;
         setFunc(pokemonData);
     }
 

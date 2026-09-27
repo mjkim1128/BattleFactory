@@ -1,8 +1,19 @@
 import { PogeyData } from "./pogey";
-import { getPokemonById, getMoveByName } from "./processjson";
+import { getPokemonById, getMoveByName, getItemByName } from "./processjson";
 import { shuffle } from "shared";
 import { DEFAULT_MOVES } from "./legalmoves";
+import { ITEM_POOL, SPECIES_EXCLUSIVE_ITEMS } from "./iteminfo";
 import ELIGIBLE_POKEMON_IDS from "./eligible_pokemon_ids.json";
+
+export async function generateRandomItem(pokemonName) {
+    const choices = shuffle([...ITEM_POOL]);
+    for (const itemName of choices) {
+        const allowedSpecies = SPECIES_EXCLUSIVE_ITEMS[itemName];
+        if (allowedSpecies && !allowedSpecies.includes(pokemonName)) continue;
+        return await getItemByName(itemName);
+    }
+    return await getItemByName(choices[0]);
+}
 
 // Only fully-evolved pokemon, pokemon with no evolution at all, and every
 // legendary/mythical (regardless of their own evolution stage) are drafted —

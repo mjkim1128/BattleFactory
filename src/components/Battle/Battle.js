@@ -178,7 +178,11 @@ export function Battle(props) {
     let currentpoke = isCurrent
         ? props.playerPokemon[0]
         : history[stepNumber].playerPokemon[0];
-    let moves = currentpoke.moveset.map((move, index) => {
+    let playableMoves = currentpoke.lockedMove
+        ? currentpoke.moveset.filter((move) => move.name === currentpoke.lockedMove)
+        : currentpoke.moveset;
+    if (playableMoves.length === 0) playableMoves = currentpoke.moveset;
+    let moves = playableMoves.map((move, index) => {
         return (
             <div key={index}>
                 <Move

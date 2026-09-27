@@ -5,11 +5,39 @@ import {
     pokemonNameToString,
     statNameToString,
 } from "./helpers";
+import {
+    RESIST_BERRIES,
+    STAT_BOOST_BERRIES,
+    HP_HEAL_BERRIES,
+    BERRY_JUICE,
+    CUSTAP_BERRY,
+    KEE_BERRY,
+    WHITE_HERB,
+    WEAKNESS_POLICY,
+    AIR_BALLOON,
+    FOCUS_SASH,
+    LIFE_ORB,
+    BLACK_SLUDGE,
+    LEFTOVERS,
+    COVERT_CLOAK,
+    METRONOME_ITEM,
+    CHOICE_ITEMS,
+} from "./iteminfo";
+
+function hasCustapBoost(pokemon) {
+    return (
+        pokemon.item &&
+        pokemon.item.name === CUSTAP_BERRY &&
+        pokemon.hp[0] / pokemon.hp[1] <= 0.25
+    );
+}
 
 export function doTurn(playerPokemon, opponentPokemon, move) {
     let cpuMove = makeMove(playerPokemon, opponentPokemon);
-    let movefirst = move.priority > cpuMove.priority ? true : false;
-    if (move.priority === cpuMove.priority) {
+    let playerPriority = move.priority + (hasCustapBoost(playerPokemon[0]) ? 1 : 0);
+    let cpuPriority = cpuMove.priority + (hasCustapBoost(opponentPokemon[0]) ? 1 : 0);
+    let movefirst = playerPriority > cpuPriority ? true : false;
+    if (playerPriority === cpuPriority) {
         movefirst =
             statCalc(
                 playerPokemon[0].base_stats[5],
@@ -24,26 +52,32 @@ export function doTurn(playerPokemon, opponentPokemon, move) {
     }
     let text = [];
     if (movefirst) {
+        if (hasCustapBoost(playerPokemon[0])) playerPokemon[0].item = null;
         text = addArrayToArray(
             text,
             playerTurn(playerPokemon, opponentPokemon, move)
         );
         if (opponentPokemon[0].hp[0] <= 0) return text;
+        if (hasCustapBoost(opponentPokemon[0])) opponentPokemon[0].item = null;
         text = addArrayToArray(
             text,
             playerTurn(opponentPokemon, playerPokemon, cpuMove)
         );
     } else {
+        if (hasCustapBoost(opponentPokemon[0])) opponentPokemon[0].item = null;
         text = addArrayToArray(
             text,
             playerTurn(opponentPokemon, playerPokemon, cpuMove)
         );
         if (playerPokemon[0].hp[0] <= 0) return text;
+        if (hasCustapBoost(playerPokemon[0])) playerPokemon[0].item = null;
         text = addArrayToArray(
             text,
             playerTurn(playerPokemon, opponentPokemon, move)
         );
     }
+    text = addArrayToArray(text, doEndOfTurn(playerPokemon[0]));
+    text = addArrayToArray(text, doEndOfTurn(opponentPokemon[0]));
     return text;
 }
 
@@ -53,24 +87,38 @@ export function playerTurn(playerPokemon, opponentPokemon, move) {
     if (move.priority === 6) text.push(doSwitch(playerPokemon, move.index));
     /// Move is attack
     else {
+        const attacker = playerPokemon[0];
         text = addArrayToArray(
             text,
-            turnText(playerPokemon[0], opponentPokemon[0], move)
+            turnText(attacker, opponentPokemon[0], move)
         );
         if (typeEffectiveness(move, opponentPokemon[0]) !== 0) {
             text = addArrayToArray(
                 text,
-                doAttack(playerPokemon[0], opponentPokemon[0], move)
+                doAttack(attacker, opponentPokemon[0], move)
             );
+            trackMetronome(attacker, move);
+            if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
+                attacker.lockedMove = move.name;
             /// temporary fix for moves giving me errors
             if (move.meta !== undefined)
                 text = addArrayToArray(
                     text,
-                    doMoveEffects(playerPokemon[0], opponentPokemon[0], move)
+                    doMoveEffects(attacker, opponentPokemon[0], move)
                 );
         }
     }
     return text;
+}
+
+function trackMetronome(attacker, move) {
+    if (!attacker.item || attacker.item.name !== METRONOME_ITEM) return;
+    if (attacker.lastMoveName === move.name) {
+        attacker.moveRepeatCount = Math.min((attacker.moveRepeatCount || 1) + 1, 6);
+    } else {
+        attacker.lastMoveName = move.name;
+        attacker.moveRepeatCount = 1;
+    }
 }
 
 export function turnText(attacker, defender, move) {
@@ -110,10 +158,91 @@ export function addArrayToArray(arr1, arr2) {
     return arr1;
 }
 
+function itemLabel(pokemon) {
+    return pokemon.item ? pokemon.item.korean_name || pokemon.item.name : "";
+}
+
+function healPercent(pokemon, amount, verb) {
+    if (amount <= 0) return null;
+    pokemon.hp[0] = Math.min(pokemon.hp[1], pokemon.hp[0] + amount);
+    return (
+        pokemonNameToString(pokemon) +
+        (verb || " healed some HP using its ") +
+        itemLabel(pokemon) +
+        "!"
+    );
+}
+
+// Berries/items that react to the holder's own HP after it changes (own HP threshold
+// heals and stat boosts). Consumed on use.
+function tryConsumeHpTriggeredItem(pokemon, text) {
+    if (!pokemon.item || pokemon.hp[0] <= 0) return;
+    const name = pokemon.item.name;
+    const fraction = pokemon.hp[0] / pokemon.hp[1];
+
+    if (name === BERRY_JUICE && fraction < 0.5) {
+        const msg = healPercent(pokemon, 20, " restored 20 HP using its ");
+        if (msg) text.push(msg);
+        pokemon.item = null;
+        return;
+    }
+    if (name === "sitrus-berry" && fraction <= 0.5) {
+        const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 4), " ate its ");
+        if (msg) text.push(msg + " and restored HP!");
+        pokemon.item = null;
+        return;
+    }
+    if (HP_HEAL_BERRIES.has(name) && name !== "sitrus-berry" && fraction <= 0.25) {
+        const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 3), " ate its ");
+        if (msg) text.push(msg + " and restored HP!");
+        pokemon.item = null;
+        return;
+    }
+    const statIndex = STAT_BOOST_BERRIES[name];
+    if (statIndex !== undefined && fraction <= 0.25) {
+        addArrayToArray(
+            text,
+            doStatChangesRaw(pokemon, [{ statIndex, change: 1 }])
+        );
+        text.push(pokemonNameToString(pokemon) + " ate its " + itemLabel(pokemon) + "!");
+        pokemon.item = null;
+    }
+}
+
 export function doAttack(attacker, defender, move) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
     let damage = damageCalc(attacker, defender, move);
+    const typeEff = typeEffectiveness(move, defender);
+
+    // Resist berry: halves a super-effective hit of the matching type, then is eaten
+    if (
+        defender.item &&
+        RESIST_BERRIES[defender.item.name] === move.type.name &&
+        typeEff > 1
+    ) {
+        damage = Math.floor(damage / 2);
+        text.push(
+            pokemonNameToString(defender) +
+                "'s " +
+                itemLabel(defender) +
+                " weakened the hit!"
+        );
+        defender.item = null;
+    }
+
+    // Focus Sash: survive a would-be KO from full HP with 1 HP, then is consumed
+    let sashSaved = false;
+    if (
+        defender.item &&
+        defender.item.name === FOCUS_SASH &&
+        defender.hp[0] === defender.hp[1] &&
+        damage >= defender.hp[0]
+    ) {
+        damage = defender.hp[0] - 1;
+        sashSaved = true;
+    }
+
     let damage_number = 0; /// changed to 0 from null
     [defender.hp[0], damage_number] =
         defender.hp[0] - damage > 0
@@ -125,6 +254,47 @@ export function doAttack(attacker, defender, move) {
             Math.round((damage_number / defender.hp[1]) * 1000) / 10 +
             "% HP!"
     );
+    if (sashSaved) {
+        text.push(
+            pokemonNameToString(defender) + " hung on using its " + itemLabel(defender) + "!"
+        );
+        defender.item = null;
+    }
+
+    // Air Balloon: pops the moment the holder takes any damage (ground hits never reach here, see typeEffectiveness)
+    if (defender.item && defender.item.name === AIR_BALLOON && damage_number > 0) {
+        text.push(pokemonNameToString(defender) + "'s Balloon popped!");
+        defender.item = null;
+    }
+
+    // Weakness Policy: +2 Atk/SpA when hit by a super-effective move
+    if (
+        defender.item &&
+        defender.item.name === WEAKNESS_POLICY &&
+        typeEff > 1 &&
+        defender.hp[0] > 0
+    ) {
+        addArrayToArray(
+            text,
+            doStatChangesRaw(defender, [
+                { statIndex: 0, change: 2 },
+                { statIndex: 2, change: 2 },
+            ])
+        );
+        defender.item = null;
+    }
+
+    // Kee Berry: +1 Defense when hit by a physical move
+    if (
+        defender.item &&
+        defender.item.name === KEE_BERRY &&
+        move.damage_class.name === "physical" &&
+        defender.hp[0] > 0
+    ) {
+        addArrayToArray(text, doStatChangesRaw(defender, [{ statIndex: 1, change: 1 }]));
+        defender.item = null;
+    }
+
     if (
         attacker.hp[0] < attacker.hp[1] &&
         move.meta &&
@@ -188,23 +358,41 @@ export function doAttack(attacker, defender, move) {
         attacker.hp[0] = 0;
         text.push(pokemonNameToString(attacker) + " blew up!");
     }
+
+    // Life Orb: 1/10 max HP recoil on the attacker whenever it deals damage
+    if (
+        attacker.hp[0] > 0 &&
+        damage_number > 0 &&
+        attacker.item &&
+        attacker.item.name === LIFE_ORB
+    ) {
+        attacker.hp[0] = Math.max(0, attacker.hp[0] - Math.floor(attacker.hp[1] / 10));
+        text.push(pokemonNameToString(attacker) + " was hurt by its Life Orb!");
+    }
+
     if (defender.hp[0] === 0) {
         text.push(pokemonNameToString(defender) + " fainted!");
     }
     if (attacker.hp[0] === 0) {
         text.push(pokemonNameToString(attacker) + " fainted!");
     }
+
+    if (defender.hp[0] > 0) tryConsumeHpTriggeredItem(defender, text);
+    if (attacker.hp[0] > 0) tryConsumeHpTriggeredItem(attacker, text);
+
     return text;
 }
 
 export function doSwitch(pokemon, index) {
     let oldCurrent = pokemon[0];
     resetStatChanges(oldCurrent); // Reset stat changes on switch out
+    oldCurrent.lockedMove = null;
     let text = "";
     if (oldCurrent.hp[0] > 0)
         text = "Switch out " + pokemonNameToString(oldCurrent) + "! ";
     pokemon[0] = pokemon[index];
     pokemon[index] = oldCurrent;
+    pokemon[0].lockedMove = null;
     text = text + "Switch in " + pokemonNameToString(pokemon[0]) + "!";
     resetStatChanges(pokemon); // Reset stat changes on switch in
     return text;
@@ -226,20 +414,45 @@ export function doMoveEffects(attacker, defender, move) {
         move.meta.stat_chance === 100 &&
         move.meta.category.name === "damage+lower"
     ) {
-        addArrayToArray(text, doStatChanges(defender, move));
+        if (defender.item && defender.item.name === COVERT_CLOAK) {
+            text.push(
+                pokemonNameToString(defender) +
+                    "'s Covert Cloak protected it from the effect!"
+            );
+        } else {
+            addArrayToArray(text, doStatChanges(defender, move));
+        }
     }
+    tryConsumeWhiteHerb(attacker, text);
+    tryConsumeWhiteHerb(defender, text);
     return text;
+}
+
+function tryConsumeWhiteHerb(pokemon, text) {
+    if (!pokemon.item || pokemon.item.name !== WHITE_HERB) return;
+    if (pokemon.stat_levels.some((level) => level < 0)) {
+        pokemon.stat_levels = pokemon.stat_levels.map((level) => Math.max(level, 0));
+        text.push(pokemonNameToString(pokemon) + " restored its stats using its White Herb!");
+        pokemon.item = null;
+    }
+}
+
+const STAT_NAMES = ["attack", "defense", "special-attack", "special-defense", "speed"];
+
+// Applies stat stage changes described as {statIndex, change} pairs (used by items,
+// which don't come with a move's stat_changes array to read from).
+function doStatChangesRaw(pokemon, changes) {
+    return doStatChanges(pokemon, {
+        stat_changes: changes.map(({ statIndex, change }) => ({
+            stat: { name: STAT_NAMES[statIndex] },
+            change,
+        })),
+    });
 }
 
 export function doStatChanges(pokemon, move) {
     let texts = [];
-    const stat_names = [
-        "attack",
-        "defense",
-        "special-attack",
-        "special-defense",
-        "speed",
-    ];
+    const stat_names = STAT_NAMES;
     for (const stat of move.stat_changes) {
         let text = "";
         const stat_index = stat_names.indexOf(stat.stat.name);
@@ -273,4 +486,25 @@ export function doStatChanges(pokemon, move) {
 
 export function resetStatChanges(pokemon) {
     pokemon.stat_changes = Array(5).fill(0);
+}
+
+function doEndOfTurn(pokemon) {
+    let text = [];
+    if (pokemon.hp[0] <= 0 || !pokemon.item) return text;
+    if (pokemon.item.name === LEFTOVERS) {
+        const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
+        if (msg) text.push(msg);
+    } else if (pokemon.item.name === BLACK_SLUDGE) {
+        const isPoison = pokemon.types.some((t) => t.type.name === "poison");
+        if (isPoison) {
+            const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
+            if (msg) text.push(msg);
+        } else {
+            pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
+            text.push(pokemonNameToString(pokemon) + " was hurt by its Black Sludge!");
+            if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+        }
+    }
+    if (pokemon.hp[0] > 0) tryConsumeHpTriggeredItem(pokemon, text);
+    return text;
 }

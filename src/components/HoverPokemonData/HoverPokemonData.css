@@ -21,3 +21,14 @@
 .hover-pokemon-div-top p {
     margin-top: 0.3em;
 }
+
+.hover-pokemon-item {
+    display: flex;
+    align-items: center;
+}
+
+.hover-pokemon-item-icon {
+    width: 20px;
+    height: 20px;
+    margin-right: 4px;
+}

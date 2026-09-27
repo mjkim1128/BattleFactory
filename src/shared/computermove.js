@@ -1,7 +1,14 @@
 import { damageCalc } from "./damagecalc";
 
+// A Choice item holder can only pick the move it locked itself into.
+function usableMoveset(pokemon) {
+    if (!pokemon.lockedMove) return pokemon.moveset;
+    const locked = pokemon.moveset.filter((m) => m.name === pokemon.lockedMove);
+    return locked.length > 0 ? locked : pokemon.moveset;
+}
+
 export function makeMove(playerTeam, opponentTeam) {
-    for (const move of opponentTeam[0].moveset) {
+    for (const move of usableMoveset(opponentTeam[0])) {
         // attempt for priority
         if (
             playerTeam[0].hp[0] -
@@ -30,7 +37,7 @@ export function makeMove(playerTeam, opponentTeam) {
 export function strongestMove(playerTeam, opponentTeam) {
     let damage = 0;
     let choice = null;
-    for (const move of opponentTeam[0].moveset) {
+    for (const move of usableMoveset(opponentTeam[0])) {
         [damage, choice] =
             damageCalc(opponentTeam[0], playerTeam[0], move) > damage
                 ? [damageCalc(opponentTeam[0], playerTeam[0], move), move]

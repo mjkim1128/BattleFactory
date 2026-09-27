@@ -8,6 +8,7 @@ const pokemonByIdCache = new Map();
 const pokemonByNameCache = new Map();
 const moveByNameCache = new Map();
 const moveByIdCache = new Map();
+const itemByNameCache = new Map();
 const speciesKoreanNameCache = new Map();
 
 async function fetchFromApi(url) {
@@ -62,6 +63,17 @@ export async function getMoveById(id) {
     return lodash.cloneDeep(move);
 }
 
+export async function getItemByName(name) {
+    if (itemByNameCache.has(name)) {
+        return lodash.cloneDeep(itemByNameCache.get(name));
+    }
+    const item = getCustomItemData(
+        await fetchFromApi(`${POKEAPI_BASE}/item/${name}`)
+    );
+    itemByNameCache.set(item.name, item);
+    return lodash.cloneDeep(item);
+}
+
 export async function getPokemonById(id) {
     if (pokemonByIdCache.has(id)) {
         return lodash.cloneDeep(pokemonByIdCache.get(id));
@@ -98,6 +110,15 @@ export function getCustomPokemonData(poke) {
         stats: poke.stats,
         types: poke.types,
         weight: poke.weight,
+    };
+}
+
+export function getCustomItemData(item) {
+    return {
+        category: item.category,
+        korean_name: findLocalizedName(item.names, "ko"),
+        name: item.name,
+        sprites: item.sprites,
     };
 }
 

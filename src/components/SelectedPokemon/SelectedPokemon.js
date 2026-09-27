@@ -27,6 +27,18 @@ export function SelectedPokemon(props) {
                 <div>
                     <p>{pokemonNameToString(props.pokemon)}</p>
                     <p>{pokemonTypeToString(props.pokemon)}</p>
+                    {props.pokemon.item && (
+                        <p className="selected-pokemon-item">
+                            {props.pokemon.item.sprites && props.pokemon.item.sprites.default && (
+                                <img
+                                    className="selected-pokemon-item-icon"
+                                    src={props.pokemon.item.sprites.default}
+                                    alt={props.pokemon.item.name}
+                                />
+                            )}
+                            {props.pokemon.item.korean_name || props.pokemon.item.name}
+                        </p>
+                    )}
                 </div>
             </div>
             <div className="selected-pokemon-row">
