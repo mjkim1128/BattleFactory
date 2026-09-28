@@ -114,7 +114,11 @@ export function Move(props) {
                             : ""
                     }
                 >
-                    <p>Power: {props.move.power}</p>
+                    <p>
+                        Power: {props.move.power}
+                        {typeof props.move.accuracy === "number" &&
+                            " / Accuracy: " + props.move.accuracy}
+                    </p>
                     <p>
                         Damage Class:{" "}
                         {damageClassToString(props.move.damage_class.name)}

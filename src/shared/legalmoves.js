@@ -1,26 +1,18 @@
+// Two-turn (Fly, Solar Beam...) and recharge (Hyper Beam...) moves used to be banned
+// because the engine couldn't run them; they work now, so only Sky Drop stays out.
 export const BANNED_MOVES = [
     "dream-eater",
-    "dig",
-    "dive",
-    "fly",
     "uproar",
     "focus-punch",
-    "hyper-beam",
-    "giga-impact",
     "sky-drop",
-    "skull-bash",
     "steel-roller",
     "dynamic-punch",
     "belch",
     "zap-cannon",
-    "solar-beam",
-    "solar-blade",
     "petal-dance",
     "burn-up",
     "last-resort",
-    "sky-attack",
     "thrash",
-    "meteor-beam",
     "steel-beam",
     "round",
     "future-sight", /// For now
@@ -31,13 +23,9 @@ export const BANNED_MOVES = [
     "bubble-beam", /// snorlax??
     "eruption",
     "water-spout",
-    "blast-burn",
-    "frenzy-plant",
-    "hydro-cannon",
     "synchronoise",
     "strength", // boring
     "slash", // 70 bp lame
-    "razor-wind", // ? lol
     "slam", // slam
     "headbutt", // butthead
     "vice-grip", // crabs

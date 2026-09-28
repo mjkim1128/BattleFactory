@@ -10,6 +10,7 @@ import React, { useEffect, useState } from "react";
 import {
     doSwitch,
     doTurn,
+    resumeTurn,
     switchPokemon,
     lodash,
     arraysEqual,
@@ -107,7 +108,12 @@ export function Battle(props) {
         setTurns(t);
         if (arraysEqual(text, announcerMessage)) text.push(" (again lol)");
         setAnnouncerMessage(text);
-        if (
+        if (props.playerPokemon.pendingSwitch) {
+            /// The player's pokemon pivoted out (U-turn, Baton Pass, ...): the turn is paused
+            /// until they pick who comes in. Show the live board so the party is clickable.
+            setForceSwitch(true);
+            setStepNumber(stepNumber + 1);
+        } else if (
             props.playerPokemon[0].hp[0] === 0 ||
             props.opponentPokemon[0].hp[0] === 0
         ) {
@@ -122,7 +128,32 @@ export function Battle(props) {
         })();
     }
 
+    function finishPivot(index) {
+        const text = resumeTurn(props.playerPokemon, props.opponentPokemon, index);
+        for (const t of text) updateTurnText(t);
+        setAnnouncerMessage(text);
+        const opponentDown = props.opponentPokemon[0].hp[0] <= 0;
+        const playerDown = props.playerPokemon[0].hp[0] <= 0;
+        if (!opponentDown && !playerDown) {
+            setForceSwitch(false);
+            updateHistory();
+            return;
+        }
+        /// Something fainted after the swap; isForceSwitch is already true, so its effect
+        /// won't fire again and the CPU's replacement / game over is handled here.
+        if (props.playerPokemon.filter((poke) => poke.hp[0] > 0).length === 0) {
+            setGameOver(true);
+            updateHistory();
+        } else if (opponentDown && !playerDown) {
+            forcedSwitch(props.opponentPokemon, -1);
+        }
+    }
+
     function forcedSwitch(pokemonArr, index, playerType = "cpu") {
+        if (playerType === "player" && props.playerPokemon.pendingSwitch) {
+            finishPivot(index);
+            return;
+        }
         let switch_index =
             playerType === "cpu"
                 ? switchPokemon(props.playerPokemon, props.opponentPokemon)
@@ -178,8 +209,11 @@ export function Battle(props) {
     let currentpoke = isCurrent
         ? props.playerPokemon[0]
         : history[stepNumber].playerPokemon[0];
-    let playableMoves = currentpoke.lockedMove
-        ? currentpoke.moveset.filter((move) => move.name === currentpoke.lockedMove)
+    /// A pokemon mid-way through a two-turn move (Fly, Solar Beam, ...) must finish it;
+    /// a Choice item locks it to the move it already used.
+    const forcedMoveName = currentpoke.charging || currentpoke.lockedMove;
+    let playableMoves = forcedMoveName
+        ? currentpoke.moveset.filter((move) => move.name === forcedMoveName)
         : currentpoke.moveset;
     if (playableMoves.length === 0) playableMoves = currentpoke.moveset;
     let moves = playableMoves.map((move, index) => {

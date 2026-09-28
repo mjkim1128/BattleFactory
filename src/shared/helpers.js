@@ -41,6 +41,8 @@ const STAT_KO = {
     "special-attack": "특수공격",
     "special-defense": "특수방어",
     speed: "스피드",
+    accuracy: "명중률",
+    evasion: "회피율",
 };
 
 export function typeNameToString(typeName) {

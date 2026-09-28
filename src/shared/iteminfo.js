@@ -1,9 +1,9 @@
 // Items this game actually gives real battle effects to. Left out on purpose: anything
-// that only matters with a system this engine doesn't have (status conditions, entry
-// hazards, weather, accuracy/crit rolls, multi-hit moves, two-turn moves, sound-move
-// flags). Those items exist in the Pokedex/UI but were kept out of ITEM_POOL so nothing
-// gets handed out that would silently do nothing. (Status conditions and contact
-// detection now exist, so their items were added back in.)
+// that only matters with a system this engine doesn't have (entry hazards, weather,
+// accuracy/crit rolls, sound-move flags). Those items exist in the Pokedex/UI but were
+// kept out of ITEM_POOL so nothing gets handed out that would silently do nothing.
+// (Status conditions, contact detection, multi-hit and two-turn moves now exist, so
+// their items were added back in.)
 export const ITEM_POOL = [
     // General held items
     "leftovers",
@@ -41,6 +41,12 @@ export const ITEM_POOL = [
     "life-orb",
     "rocky-helmet",
     "sticky-barb",
+    "toxic-orb",
+    "flame-orb",
+    "light-clay",
+    "power-herb",
+    "loaded-dice",
+    "wide-lens",
     // Berries
     "colbur-berry",
     "shuca-berry",
@@ -61,7 +67,20 @@ export const ITEM_POOL = [
     "yache-berry",
     "roseli-berry",
     "haban-berry",
+    // Status-curing berries
+    "lum-berry",
+    "cheri-berry",
+    "chesto-berry",
+    "pecha-berry",
+    "rawst-berry",
+    "aspear-berry",
+    "persim-berry",
 ];
+
+// Items that are only worth handing out on a real Showdown set (where the moves that make
+// them useful come with them). A random pokemon with no Fly/Solar Beam/Fury Attack in its
+// kit would just hold a dud, so generateRandomItem never rolls these.
+export const REAL_SET_ONLY_ITEMS = new Set(["power-herb", "loaded-dice"]);
 
 // item name -> move type it boosts 20% (or 30% for Muscle Band/physical, handled separately)
 export const TYPE_BOOST_ITEMS = {
@@ -133,6 +152,24 @@ export const METRONOME_ITEM = "metronome";
 export const SOUL_DEW = "soul-dew";
 export const ROCKY_HELMET = "rocky-helmet";
 export const STICKY_BARB = "sticky-barb";
+export const TOXIC_ORB = "toxic-orb";
+export const FLAME_ORB = "flame-orb";
+export const LIGHT_CLAY = "light-clay";
+export const POWER_HERB = "power-herb";
+export const LOADED_DICE = "loaded-dice";
+export const WIDE_LENS = "wide-lens";
+
+// berry -> which of the holder's conditions it cures ("confusion" is the volatile one; the
+// rest are the major status names in pokemon.status.name). Lum Berry cures all of them.
+export const STATUS_CURE_BERRIES = {
+    "lum-berry": ["paralysis", "burn", "poison", "toxic", "sleep", "freeze", "confusion"],
+    "cheri-berry": ["paralysis"],
+    "chesto-berry": ["sleep"],
+    "pecha-berry": ["poison", "toxic"],
+    "rawst-berry": ["burn"],
+    "aspear-berry": ["freeze"],
+    "persim-berry": ["confusion"],
+};
 export const CHOICE_ITEMS = {
     "choice-band": 1, // attack
     "choice-specs": 3, // special attack
@@ -183,6 +220,12 @@ export const FLING_POWER = {
     "life-orb": 30,
     "rocky-helmet": 60,
     "sticky-barb": 80,
+    "power-herb": 10,
+    "toxic-orb": 30,
+    "flame-orb": 30,
+    "light-clay": 30,
+    "loaded-dice": 30,
+    "wide-lens": 10,
 };
 export function getFlingPower(itemName) {
     if (itemName.endsWith("-berry")) return 10;

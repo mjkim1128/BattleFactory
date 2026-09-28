@@ -20,6 +20,8 @@ export function HoverPokemonData(props) {
         "special-attack",
         "special-defense",
         "speed",
+        "accuracy",
+        "evasion",
     ];
     let stat_levels = "";
     for (let i=0; i<props.pokemon.stat_levels.length; i++) {

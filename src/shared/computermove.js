@@ -1,4 +1,18 @@
 import { damageCalc } from "./damagecalc";
+import { CHARGE_MOVES, RECHARGE_MOVES, MULTIHIT_MOVES } from "./movemechanics";
+import { hitChance } from "./accuracy";
+
+// What a single-hit damage number is really worth once the move's catch is counted: a
+// charge/recharge move costs a whole extra turn, a multi-hit move lands several times, and
+// a move that can miss is worth its chance to connect.
+function moveValue(damage, move, attacker, defender) {
+    let value = damage;
+    if (CHARGE_MOVES.has(move.name) || RECHARGE_MOVES.has(move.name)) value = damage / 2;
+    const range = MULTIHIT_MOVES[move.name];
+    if (range) value = damage * (range[0] === range[1] ? range[0] : 3.1);
+    const chance = hitChance(attacker, defender, move);
+    return chance === null ? value : value * (Math.min(chance, 100) / 100);
+}
 
 // A Choice item holder can only pick the move it locked itself into.
 function usableMoveset(pokemon) {
@@ -39,10 +53,13 @@ export function strongestMove(playerTeam, opponentTeam) {
     let choice = null;
     const moves = usableMoveset(opponentTeam[0]);
     for (const move of moves) {
-        [damage, choice] =
-            damageCalc(opponentTeam[0], playerTeam[0], move) > damage
-                ? [damageCalc(opponentTeam[0], playerTeam[0], move), move]
-                : [damage, choice];
+        const value = moveValue(
+            damageCalc(opponentTeam[0], playerTeam[0], move),
+            move,
+            opponentTeam[0],
+            playerTeam[0]
+        );
+        [damage, choice] = value > damage ? [value, move] : [damage, choice];
     }
     // Nothing deals damage (all status moves, or all immune): still return a real move,
     // callers assume this never returns null.

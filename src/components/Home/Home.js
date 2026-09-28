@@ -19,6 +19,7 @@ import {
     pickFactorySet,
     resolveFactoryMoveSlugs,
 } from "shared";
+import { keepsRawPower } from "shared/movemechanics";
 
 const BATTLE_ROUNDS = 4;
 
@@ -48,11 +49,13 @@ export function Home() {
         for (const arr of [temp, dumb]) {
             for (const poke of arr) {
                 poke.hp[0] = poke.hp[1];
-                poke.stat_levels = Array(5).fill(0);
+                poke.stat_levels = Array(7).fill(0);
                 /// Nothing battle-specific should leak into the next fight
                 poke.status = null;
                 poke.confusion = null;
                 poke.lockedMove = null;
+                poke.charging = null;
+                poke.mustRecharge = false;
                 poke.lastMoveName = null;
                 poke.moveRepeatCount = 0;
                 /// Held items are restored too, like the rest of the Pokemon Center reset
@@ -62,6 +65,8 @@ export function Home() {
             /// Reflect/Light Screen live on the team array itself, not on a pokemon
             arr.reflectTurns = 0;
             arr.lightScreenTurns = 0;
+            arr.pendingSwitch = null;
+            arr.pivotRequest = null;
         }
         setPlayerPokemon(temp);
         setOpponentPokemon(dumb);
@@ -117,7 +122,7 @@ export function Home() {
             hpCalc(pokemonData[i].base_stats[0]),
             hpCalc(pokemonData[i].base_stats[0]),
         ];
-        pokemonData[i].stat_levels = Array(5).fill(0);
+        pokemonData[i].stat_levels = Array(7).fill(0); // atk, def, spa, spd, spe, accuracy, evasion
         /// Try a real Showdown "Battle Factory" set first, so item + moveset come
         /// from the same coherent competitive set instead of two unrelated random picks.
         const factorySet = pickFactorySet(pokemonData[i].name);
@@ -131,6 +136,8 @@ export function Home() {
         pokemonData[i].originalItem = pokemonData[i].item;
         pokemonData[i].consumedItem = null;
         pokemonData[i].lockedMove = null;
+        pokemonData[i].charging = null; // move it is mid-way through (Fly, Solar Beam, ...)
+        pokemonData[i].mustRecharge = false; // just used Hyper Beam & co.
         pokemonData[i].lastMoveName = null;
         pokemonData[i].moveRepeatCount = 0;
         pokemonData[i].status = null; // 무상태
@@ -193,6 +200,7 @@ export function Home() {
                     else if (
                         move.meta &&
                         move.damage_class.name !== "status" && /// status moves have no power to clamp
+                        !keepsRawPower(move.name, move.accuracy) && /// two-turn/recharge/multi-hit/inaccurate moves keep their real power
                         move.priority === 0 &&
                         move.meta.stat_chance !== 100
                     ) {
@@ -262,7 +270,7 @@ export function Home() {
             } else if (move.meta && move.meta.drain < 0)
                 move.power =
                     move.power > 120 || move.name === "volt-tackle" ? 150 : 120;
-            else if (move.meta && move.damage_class.name !== "status" && move.priority === 0 && move.meta.stat_chance !== 100) {
+            else if (move.meta && move.damage_class.name !== "status" && !keepsRawPower(move.name, move.accuracy) && move.priority === 0 && move.meta.stat_chance !== 100) {
                 if (move.power < 75) move.power = 75;
                 if (move.power > 95) move.power = 95;
                 else if (move.name === "tri-attack")
