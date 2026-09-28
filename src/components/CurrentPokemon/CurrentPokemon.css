@@ -2,6 +2,12 @@
     display: flex;
 }
 
+.substitute-doll {
+    image-rendering: pixelated;
+    transform: scale(2);
+    transform-origin: 50% 65%;
+}
+
 #fainted-current-pokemon {
     opacity: 50%;
 }

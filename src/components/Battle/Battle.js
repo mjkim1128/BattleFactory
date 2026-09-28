@@ -7,6 +7,7 @@ import {
     BattleAnnouncer,
 } from "components";
 import React, { useEffect, useState } from "react";
+import { SUBSTITUTE_FRONT, SUBSTITUTE_BACK } from "components/StatusBadges";
 import {
     doSwitch,
     doTurn,
@@ -358,6 +359,7 @@ export function Battle(props) {
                                 ? props.opponentPokemon[0]
                                 : history[stepNumber].opponentPokemon[0]
                         }
+                        substituteImg={SUBSTITUTE_FRONT}
                         img={
                             /// a pokemon under Illusion shows its disguise's sprite
                             (isCurrent
@@ -375,6 +377,7 @@ export function Battle(props) {
                                 ? props.playerPokemon[0]
                                 : history[stepNumber].playerPokemon[0]
                         }
+                        substituteImg={SUBSTITUTE_BACK}
                         img={
                             isCurrent
                                 ? props.playerPokemon[0].sprites.back_default

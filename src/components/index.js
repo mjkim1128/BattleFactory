@@ -5,6 +5,7 @@ export * from './PokemonOption';
 export * from './SelectedPokemon';
 export * from './Battle';
 export * from './CurrentPokemon';
+export * from './StatusBadges';
 export * from './PokemonParty';
 export * from './HealthBar';
 export * from './Move';

@@ -1,0 +1,30 @@
+.status-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin: 2px 0;
+}
+
+.status-badge {
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.status-badge-status {
+    background: #b5651d;
+}
+
+.status-badge-bad {
+    background: #a33a3a;
+}
+
+.status-badge-good {
+    background: #2f7d4a;
+}
+
+.status-badge-field {
+    background: #4a5fa3;
+}
