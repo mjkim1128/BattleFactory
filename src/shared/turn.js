@@ -6,7 +6,8 @@ import {
     statNameToString,
 } from "./helpers";
 import { FOE_TARGETS, isOhkoMove, ohkoImmune, rollAccuracy } from "./accuracy";
-import { spendPP } from "./pp";
+import { spendPP, restorePP, ppLeft, maxPP } from "./pp";
+import { activeItem } from "./helditem";
 import {
     HAZARD_MOVES,
     CLEAR_OWN_SIDE_MOVES,
@@ -59,6 +60,11 @@ import {
     blocksStatusMoves,
     blocksPriorityMoves,
     protectsItem,
+    preventsDisable,
+    hasSlowStatusMoves,
+    tryIceFace,
+    preventsDrag,
+    copiesFoeBoosts,
 } from "./abilities";
 import {
     ensureField,
@@ -100,6 +106,7 @@ import {
     DANCE_MOVES,
     SECONDARY_MOVES,
     EXPLOSIVE_MOVES,
+    FORCE_SWITCH_MOVES,
 } from "./movemechanics";
 import {
     RESIST_BERRIES,
@@ -153,7 +160,12 @@ function abilityApi(field) {
             t.push(pokemonNameToString(pokemon) + msg);
             return healed;
         },
+        layHazard: (team, kind, t) => setHazard(team, kind, t),
         disable: (pokemon, move, t) => {
+            if (preventsDisable(pokemon)) {
+                t.push(pokemonNameToString(pokemon) + "'s Aroma Veil protected it from Disable!");
+                return;
+            }
             pokemon.disabled = { move: move.name, turns: 5 };
             t.push(pokemonNameToString(pokemon) + "'s " + moveNameToString(move) + " was disabled!");
         },
@@ -162,7 +174,7 @@ function abilityApi(field) {
 
 function hasCustapBoost(pokemon) {
     return (
-        pokemon.item &&
+        activeItem(pokemon) &&
         pokemon.item.name === CUSTAP_BERRY &&
         pokemon.hp[0] / pokemon.hp[1] <= 0.25
     );
@@ -177,6 +189,7 @@ function consumeItem(pokemon) {
     }
     pokemon.consumedItem = pokemon.item;
     pokemon.item = null;
+    pokemon.itemUsedThisTurn = true;
 }
 
 function isRemovable(item) {
@@ -216,7 +229,7 @@ function afterBerry(pokemon, text) {
 
 // The other side's Unnerve stops a pokemon from eating berries
 function berryBlocked(pokemon) {
-    return !!pokemon.unnerved && !!pokemon.item && pokemon.item.name.endsWith("-berry");
+    return !!pokemon.unnerved && !!activeItem(pokemon) && pokemon.item.name.endsWith("-berry");
 }
 
 // Removes whichever of `cures` the pokemon currently has; returns true if it cured anything.
@@ -240,7 +253,7 @@ function cureConditions(pokemon, cures, berryLabel, text) {
 // A status-curing berry (Lum, Chesto, ...) is eaten the moment its holder gets a condition
 // it cures. Called wherever a pokemon can pick one up.
 function tryConsumeStatusCureItem(pokemon, text) {
-    if (!pokemon.item || pokemon.hp[0] <= 0 || berryBlocked(pokemon)) return;
+    if (!activeItem(pokemon) || pokemon.hp[0] <= 0 || berryBlocked(pokemon)) return;
     const cures = STATUS_CURE_BERRIES[pokemon.item.name];
     if (!cures) return;
     const applies =
@@ -258,7 +271,7 @@ function tryConsumeStatusCureItem(pokemon, text) {
 function getEffectiveSpeed(pokemon, field = null) {
     let speed = statCalc(pokemon.base_stats[5], pokemon.stat_levels[4]);
     speed = Math.floor(speed * abilitySpeedMod(pokemon, field)); // Chlorophyll, Swift Swim, Quark Drive...
-    if (pokemon.item && pokemon.item.name === "choice-scarf") speed = Math.floor(speed * 1.5);
+    if (activeItem(pokemon) && pokemon.item.name === "choice-scarf") speed = Math.floor(speed * 1.5);
     if (pokemon.status && pokemon.status.name === "paralysis") speed = Math.floor(speed / 2);
     // Unburden: twice as fast once its item is gone
     if (!pokemon.item && pokemon.originalItem && hasUnburden(pokemon)) speed *= 2;
@@ -276,7 +289,7 @@ function forcedMove(pokemon, chosenMove) {
 // whoever trapped it is still out on the field.
 export function isTrapped(team, foeTeam) {
     const pokemon = team[0];
-    if (pokemon.item && pokemon.item.name === SHED_SHELL) return false;
+    if (activeItem(pokemon) && pokemon.item.name === SHED_SHELL) return false;
     // Arena Trap / Shadow Tag / Magnet Pull (Ghost types slip past every kind of trap)
     if (
         foeTeam[0].hp[0] > 0 &&
@@ -345,10 +358,15 @@ export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
     let cpuPriority = priorityOf(cpuMove, opponentPokemon[0]);
     let movefirst = playerPriority > cpuPriority ? true : false;
     if (playerPriority === cpuPriority) {
-        movefirst =
-            getEffectiveSpeed(playerPokemon[0], field) > getEffectiveSpeed(opponentPokemon[0], field)
-                ? true
-                : false;
+        // Mycelium Might: its status moves go last in the bracket whatever the speed
+        const lastInBracket = (mv, mon) => mv.priority !== 6 && mv.damage_class.name === "status" && hasSlowStatusMoves(mon);
+        const [playerLast, cpuLast] = [lastInBracket(move, playerPokemon[0]), lastInBracket(cpuMove, opponentPokemon[0])];
+        if (playerLast !== cpuLast) movefirst = cpuLast;
+        else
+            movefirst =
+                getEffectiveSpeed(playerPokemon[0], field) > getEffectiveSpeed(opponentPokemon[0], field)
+                    ? true
+                    : false;
     }
     return addArrayToArray(entryText, runTurn(playerPokemon, opponentPokemon, { playerFirst: movefirst, move, cpuMove }, 0));
 }
@@ -379,8 +397,27 @@ function runTurn(playerPokemon, opponentPokemon, plan, step) {
         // A side that was switched out (Emergency Exit) before it got to move loses its action
         if (plan.skipSide === (isPlayer ? "player" : "cpu")) continue;
         if (hasCustapBoost(team[0])) consumeItem(team[0]);
+        const stages = snapshotStages(playerPokemon, opponentPokemon);
         text = addArrayToArray(text, playerTurn(team, foeTeam, move));
         refreshBattlefield(playerPokemon, opponentPokemon);
+        copyBoostsForOpportunist(stages, playerPokemon, opponentPokemon, text);
+        // Roar / Whirlwind / Dragon Tail / Circle Throw: a random pokemon is dragged in, and
+        // a target that hadn't moved yet loses its action
+        for (const victim of [team, foeTeam]) {
+            if (!victim.dragRequest) continue;
+            victim.dragRequest = false;
+            const options = [];
+            for (let i = 1; i < victim.length; i++) if (victim[i].hp[0] > 0) options.push(i);
+            if (options.length === 0 || victim[0].hp[0] <= 0) continue;
+            victim.pivotRequest = null;
+            const victimIsPlayer = victim === playerPokemon;
+            if (victim === foeTeam && step === 0) plan.skipSide = victimIsPlayer ? "player" : "cpu";
+            text.push(
+                doSwitch(victim, options[Math.floor(Math.random() * options.length)], {
+                    foeTeam: victimIsPlayer ? opponentPokemon : playerPokemon,
+                })
+            );
+        }
         for (const t of [playerPokemon, opponentPokemon]) runHook(t[0], "onUpdate", { field, text });
 
         // Either side can end up wanting to switch: the mover (U-turn...) or the one it hit
@@ -405,8 +442,13 @@ function runTurn(playerPokemon, opponentPokemon, plan, step) {
     }
     // The weather counts down first (a 5-turn weather deals its damage 4 times, then ends)
     tickWeather(field, text);
+    // Wish comes true at the end of the turn after it was made
+    processWish(playerPokemon, text);
+    processWish(opponentPokemon, text);
+    const endStages = snapshotStages(playerPokemon, opponentPokemon);
     text = addArrayToArray(text, doEndOfTurn(playerPokemon[0], field, opponentPokemon[0]));
     text = addArrayToArray(text, doEndOfTurn(opponentPokemon[0], field, playerPokemon[0]));
+    copyBoostsForOpportunist(endStages, playerPokemon, opponentPokemon, text);
     tickTerrain(field, text);
     // The field may have changed at the end of the turn (weather ran out, a Cloud Nine holder
     // fainted): abilities that follow it (Forecast, Protosynthesis...) catch up
@@ -414,6 +456,7 @@ function runTurn(playerPokemon, opponentPokemon, plan, step) {
     for (const t of [playerPokemon, opponentPokemon]) runHook(t[0], "onUpdate", { field, text });
     for (const team of [playerPokemon, opponentPokemon]) {
         team[0].movedThisTurn = false;
+        team[0].itemUsedThisTurn = false;
         if (team.reflectTurns > 0) team.reflectTurns -= 1;
         if (team.lightScreenTurns > 0) team.lightScreenTurns -= 1;
         if (team.auroraTurns > 0) team.auroraTurns -= 1;
@@ -473,7 +516,9 @@ export function playerTurn(playerPokemon, opponentPokemon, chosenMove) {
         const pressured = opponentPokemon[0].hp[0] > 0 && abilityName(opponentPokemon[0]) === "pressure" && aimsAtFoe(chosenMove);
         spendPP(chosenMove, pressured ? 2 : 1);
     }
+    attacker.ignoresAbilityNow = chosenMove.damage_class.name === "status" && hasSlowStatusMoves(attacker);
     executeMove(playerPokemon, opponentPokemon, chosenMove, text, {});
+    attacker.ignoresAbilityNow = false;
     return text;
 }
 
@@ -490,6 +535,18 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
 
     if (trySetupScreen(playerPokemon, move, text, field)) return;
     if (tryStartCharge(attacker, move, text, field)) return;
+    if (move.name === "healing-wish" || move.name === "lunar-dance") {
+        tryHealingWish(playerPokemon, move, text);
+        return;
+    }
+    if (move.name === "perish-song") {
+        tryPerishSong(attacker, opponentPokemon[0], move, text);
+        return;
+    }
+    if (move.name === "wish") {
+        tryWish(playerPokemon, move, text);
+        return;
+    }
     // Protean / Libero change the user's type to the move's, before anything else happens
     if (!opts.bounced) runHook(attacker, "onPrepareMove", { move, text });
 
@@ -585,7 +642,7 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
     if (foe.hp[0] > 0 && typeEffectiveness(move, foe, attacker) !== 0 && !rollAccuracy(attacker, foe, move, field)) {
         text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
         text.push(pokemonNameToString(attacker) + "'s attack missed!");
-        if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
+        if (activeItem(attacker) && CHOICE_ITEMS[attacker.item.name] !== undefined)
             attacker.lockedMove = move.name; // a missed move still locks a Choice item
         tryCrashDamage(attacker, move, text);
         return;
@@ -594,9 +651,9 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
     addArrayToArray(text, turnText(attacker, foe, move));
     if (typeEffectiveness(move, foe, attacker) === 0) tryCrashDamage(attacker, move, text);
     if (typeEffectiveness(move, foe, attacker) !== 0) {
-        addArrayToArray(text, doAttack(attacker, foe, move, opponentPokemon));
+        addArrayToArray(text, doAttack(attacker, foe, move, opponentPokemon, playerPokemon));
         trackMetronome(attacker, move);
-        if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
+        if (activeItem(attacker) && CHOICE_ITEMS[attacker.item.name] !== undefined)
             attacker.lockedMove = move.name;
         /// temporary fix for moves giving me errors
         if (move.meta !== undefined)
@@ -641,6 +698,118 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
 // Does this move go at the opposing pokemon (as opposed to the user or the whole field)?
 function aimsAtFoe(move) {
     return move.damage_class.name !== "status" || FOE_TARGETS.has(move.target && move.target.name);
+}
+
+// Healing Wish / Lunar Dance: the user faints and whoever comes in next is fully healed
+// (Lunar Dance restores PP too). It fails with nobody left to send in. If the replacement is
+// already in perfect shape the wish waits for one that isn't (Showdown's slot condition).
+function tryHealingWish(team, move, text) {
+    const user = team[0];
+    text.push(pokemonNameToString(user) + " used " + moveNameToString(move) + "!");
+    if (!team.slice(1).some((p) => p.hp[0] > 0)) {
+        text.push("But it failed!");
+        return;
+    }
+    user.hp[0] = 0;
+    team.healingWish = move.name === "lunar-dance" ? "lunar" : "healing";
+    text.push(pokemonNameToString(user) + " fainted!");
+}
+
+// The wish comes true for the pokemon that just switched in, if it needs it.
+function applyHealingWish(team, text) {
+    const kind = team.healingWish;
+    const mon = team[0];
+    if (!kind || mon.hp[0] <= 0) return;
+    const needsPP = kind === "lunar" && (mon.moveset || []).some((m) => ppLeft(m) < maxPP(m));
+    if (mon.hp[0] >= mon.hp[1] && !mon.status && !needsPP) return;
+    mon.hp[0] = mon.hp[1];
+    mon.status = null;
+    if (kind === "lunar") restorePP(mon);
+    team.healingWish = null;
+    text.push(
+        kind === "lunar"
+            ? pokemonNameToString(mon) + " became cloaked in mystical moonlight!"
+            : pokemonNameToString(mon) + "'s healing wish came true!"
+    );
+}
+
+// Wish: at the end of the next turn whoever is in the user's slot recovers half of the
+// user's max HP, even if the user has switched out by then.
+function tryWish(team, move, text) {
+    const user = team[0];
+    text.push(pokemonNameToString(user) + " used " + moveNameToString(move) + "!");
+    if (team.wish) {
+        text.push("But it failed!");
+        return;
+    }
+    team.wish = { turns: 2, amount: Math.floor(user.hp[1] / 2) };
+    text.push(pokemonNameToString(user) + " made a wish!");
+}
+
+function processWish(team, text) {
+    const wish = team.wish;
+    if (!wish) return;
+    wish.turns -= 1;
+    if (wish.turns > 0) return;
+    team.wish = null;
+    const mon = team[0];
+    if (mon.hp[0] <= 0) return;
+    const healed = Math.min(wish.amount, mon.hp[1] - mon.hp[0]);
+    if (healed <= 0) return;
+    mon.hp[0] += healed;
+    text.push(pokemonNameToString(mon) + "'s wish came true!");
+}
+
+// Roar / Whirlwind / Dragon Tail / Circle Throw: ask for the target to be dragged out (runTurn
+// does it). Suction Cups and Guard Dog hold it in place; it fails with nothing left to drag in.
+function requestDrag(attacker, defender, defenderTeam, text, isStatusMove) {
+    if (!defenderTeam || defender.hp[0] <= 0) return;
+    if (preventsDrag(defender, attacker)) {
+        text.push(pokemonNameToString(defender) + "'s " + abilityLabel(defender) + " keeps it in place!");
+        return;
+    }
+    if (!defenderTeam.slice(1).some((p) => p.hp[0] > 0)) {
+        if (isStatusMove) text.push("But it failed!");
+        return;
+    }
+    defenderTeam.dragRequest = true;
+}
+
+// Opportunist copies whatever stat boosts the other side gets: the stages of both active
+// pokemon are noted before an action and compared after it.
+function snapshotStages(teamA, teamB) {
+    return [teamA, teamB].map((team) => ({ mon: team[0], levels: team[0].stat_levels.slice() }));
+}
+function copyBoostsForOpportunist(stages, teamA, teamB, text) {
+    const pending = [];
+    [[teamA, teamB, stages[1]], [teamB, teamA, stages[0]]].forEach(([team, foeTeam, snap]) => {
+        const self = team[0];
+        const foe = foeTeam[0];
+        if (self.hp[0] <= 0 || !copiesFoeBoosts(self) || foe !== snap.mon) return;
+        const changes = [];
+        foe.stat_levels.forEach((level, i) => {
+            const gained = level - (snap.levels[i] || 0);
+            if (gained > 0) changes.push({ stat: { name: STAT_NAMES[i] }, change: gained });
+        });
+        if (changes.length > 0) pending.push([self, changes]);
+    });
+    for (const [self, changes] of pending) {
+        text.push(pokemonNameToString(self) + " seized the opportunity!");
+        addArrayToArray(text, doStatChanges(self, { stat_changes: changes }));
+    }
+}
+
+// Perish Song: everything on the field that hears it faints in a few turns unless it switches
+// out (the count is 4 so the first end-of-turn tick shows 3, like Showdown's duration).
+function tryPerishSong(attacker, foe, move, text) {
+    text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+    let affected = false;
+    for (const mon of [attacker, foe]) {
+        if (mon.hp[0] <= 0 || mon.perish != null || (mon !== attacker && abilityName(mon) === "soundproof")) continue;
+        mon.perish = 4;
+        affected = true;
+    }
+    text.push(affected ? "All Pokemon that heard the song will faint in three turns!" : "But it failed!");
 }
 
 // Jump Kick / High Jump Kick / Supercell Slam / Axe Kick: missing (or hitting something
@@ -699,7 +868,7 @@ function tryStartCharge(attacker, move, text, field) {
         }
         return false;
     }
-    const powerHerb = attacker.item && attacker.item.name === POWER_HERB;
+    const powerHerb = activeItem(attacker) && attacker.item.name === POWER_HERB;
     if (!powerHerb) {
         text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
         text.push(pokemonNameToString(attacker) + " " + (CHARGE_MESSAGES[move.name] || "began charging!"));
@@ -715,7 +884,7 @@ function tryStartCharge(attacker, move, text, field) {
         return false;
     }
     attacker.charging = move.name;
-    if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
+    if (activeItem(attacker) && CHOICE_ITEMS[attacker.item.name] !== undefined)
         attacker.lockedMove = move.name;
     return true;
 }
@@ -802,7 +971,7 @@ function canAct(attacker, text, move) {
 // team arrays are already threaded through doTurn/playerTurn everywhere.
 function trySetupScreen(attackingTeam, move, text, field) {
     if (move.name !== "reflect" && move.name !== "light-screen" && move.name !== "aurora-veil") return false;
-    const holder = attackingTeam[0].item;
+    const holder = activeItem(attackingTeam[0]);
     const turns = holder && holder.name === LIGHT_CLAY ? 8 : 5; // Light Clay stretches a screen to 8 turns
     if (move.name === "aurora-veil") {
         // Aurora Veil (both categories at once) can only be raised in hail or snow
@@ -825,7 +994,7 @@ function trySetupScreen(attackingTeam, move, text, field) {
 }
 
 function trackMetronome(attacker, move) {
-    if (!attacker.item || attacker.item.name !== METRONOME_ITEM) return;
+    if (!activeItem(attacker) || attacker.item.name !== METRONOME_ITEM) return;
     if (attacker.lastMoveName === move.name) {
         attacker.moveRepeatCount = Math.min((attacker.moveRepeatCount || 1) + 1, 6);
     } else {
@@ -890,7 +1059,7 @@ function healPercent(pokemon, amount, verb) {
 // Berries/items that react to the holder's own HP after it changes (own HP threshold
 // heals and stat boosts). Consumed on use.
 function tryConsumeHpTriggeredItem(pokemon, text) {
-    if (!pokemon.item || pokemon.hp[0] <= 0 || berryBlocked(pokemon)) return;
+    if (!activeItem(pokemon) || pokemon.hp[0] <= 0 || berryBlocked(pokemon)) return;
     const name = pokemon.item.name;
     const fraction = pokemon.hp[0] / pokemon.hp[1];
     const mult = hasRipen(pokemon) ? 2 : 1; // Ripen: berries work twice as well
@@ -1013,6 +1182,23 @@ function tryStatusMoveEffect(attacker, defender, move, text, field, defenderTeam
         return;
     }
 
+    // Roar / Whirlwind
+    if (FORCE_SWITCH_MOVES.has(move.name)) {
+        requestDrag(attacker, defender, defenderTeam, text, true);
+        return;
+    }
+
+    // Memento: the user faints to sharply lower the target's Attack and Sp. Atk
+    if (move.name === "memento") {
+        addArrayToArray(
+            text,
+            doStatChanges(defender, { stat_changes: [{ stat: { name: "attack" }, change: -2 }, { stat: { name: "special-attack" }, change: -2 }] }, attacker)
+        );
+        attacker.hp[0] = 0;
+        text.push(attackerName + " fainted!");
+        return;
+    }
+
     // Mean Look / Block / Spider Web: the target can't switch out while the user is around
     if (TRAPPING_MOVES.has(move.name)) {
         if (defender.types.some((t) => t.type.name === "ghost")) {
@@ -1067,7 +1253,7 @@ function tryStatusMoveEffect(attacker, defender, move, text, field, defenderTeam
 
     if (move.name === "stuff-cheeks") {
         // Needs a berry to eat; the +2 Defense below is its normal stat_changes handling
-        if (!attacker.item || !attacker.item.name.endsWith("-berry")) {
+        if (!activeItem(attacker) || !attacker.item.name.endsWith("-berry")) {
             text.push("But it failed!");
             return;
         }
@@ -1251,12 +1437,12 @@ function rollHitCount(move, attacker) {
     if (min === max) return min;
     if (hasMaxHits(attacker)) return max; // Skill Link
     // Loaded Dice: a "2-5 hits" move always hits 4 or 5 times
-    if (attacker.item && attacker.item.name === LOADED_DICE) return Math.random() < 0.5 ? 4 : 5;
+    if (activeItem(attacker) && attacker.item.name === LOADED_DICE) return Math.random() < 0.5 ? 4 : 5;
     const roll = Math.random();
     return roll < 0.35 ? 2 : roll < 0.7 ? 3 : roll < 0.85 ? 4 : 5;
 }
 
-export function doAttack(attacker, defender, move, defenderTeam) {
+export function doAttack(attacker, defender, move, defenderTeam, attackerTeam = null) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
     const field = defenderTeam ? ensureField(defenderTeam, null) : null;
@@ -1272,7 +1458,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         return text;
     }
     // Fling: fails if the attacker has nothing to throw
-    if (move.name === "fling" && !attacker.item) {
+    if (move.name === "fling" && !activeItem(attacker)) {
         text.push("But it failed!");
         return text;
     }
@@ -1300,13 +1486,14 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         if (hit > 0 && ROLLS_ACCURACY_EACH_HIT.has(move.name) && !rollAccuracy(attacker, defender, move, field)) break;
         const hitMove = ESCALATING_MULTIHIT.has(move.name) ? { ...move, power: move.power * (hit + 1) } : move;
         const ohko = isOhkoMove(move); // Fissure & co. deal exactly the target's remaining HP
-        const isCrit = !ohko && rollCrit(attacker, defender, move);
+        const gambit = move.name === "final-gambit"; // fixed damage: no crit, no screens
+        const isCrit = !ohko && !gambit && rollCrit(attacker, defender, move);
         let damage = ohko ? defender.hp[0] : damageCalc(attacker, defender, hitMove, { crit: isCrit, field });
         const typeEff = typeEffectiveness(move, defender, attacker);
 
         // Reflect/Light Screen/Aurora Veil: halve incoming damage of the matching category for
         // the defending side while the screen is still up (a critical hit goes right through).
-        if (defenderTeam && !ohko && !isCrit && !bypassesScreens(attacker)) {
+        if (defenderTeam && !ohko && !gambit && !isCrit && !bypassesScreens(attacker)) {
             if (
                 (move.damage_class.name === "physical" && defenderTeam.reflectTurns > 0) ||
                 (move.damage_class.name === "special" && defenderTeam.lightScreenTurns > 0) ||
@@ -1321,7 +1508,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
 
         // Resist berry: halves a super-effective hit of the matching type, then is eaten
         if (
-            defender.item &&
+            activeItem(defender) &&
             RESIST_BERRIES[defender.item.name] === move.type.name &&
             typeEff > 1 &&
             !ohko &&
@@ -1345,7 +1532,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         // Focus Sash: survive a would-be KO from full HP with 1 HP, then is consumed
         let sashSaved = false;
         if (
-            defender.item &&
+            activeItem(defender) &&
             defender.item.name === FOCUS_SASH &&
             defender.hp[0] === defender.hp[1] &&
             damage >= defender.hp[0]
@@ -1355,6 +1542,12 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         }
 
         if (isCrit) text.push("A critical hit!");
+        // Eiscue's Ice Face soaks up the first physical hit (its form changes, it loses no HP)
+        let iceFaceBroke = false;
+        if (damage > 0 && tryIceFace(defender, attacker, move, text)) {
+            damage = 0;
+            iceFaceBroke = true;
+        }
         // Mimikyu's Disguise soaks up the first damaging hit (then it takes 1/8 max HP)
         let disguiseBroke = false;
         if (abilityName(defender) === "disguise" && !defender.disguiseBusted && !ignoresAbilities(attacker)) {
@@ -1368,11 +1561,13 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             defender.hp[0] - damage > 0
                 ? [defender.hp[0] - damage, damage]
                 : [0, defender.hp[0]];
+        // Final Gambit: the user gives everything it has left
+        if (gambit) attacker.hp[0] = 0;
         if (disguiseBroke) {
             text.push(pokemonNameToString(defender) + "'s disguise served it as a decoy!");
             defender.hp[0] = Math.max(0, defender.hp[0] - Math.floor(defender.hp[1] / 8));
             text.push(pokemonNameToString(defender) + "'s disguise busted!");
-        } else {
+        } else if (!iceFaceBroke) {
             text.push(
                 pokemonNameToString(defender) +
                     " lost " +
@@ -1389,14 +1584,14 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         }
 
         // Air Balloon: pops the moment the holder takes any damage (ground hits never reach here, see typeEffectiveness)
-        if (defender.item && defender.item.name === AIR_BALLOON && damage_number > 0) {
+        if (activeItem(defender) && defender.item.name === AIR_BALLOON && damage_number > 0) {
             text.push(pokemonNameToString(defender) + "'s Balloon popped!");
             consumeItem(defender);
         }
 
         // Weakness Policy: +2 Atk/SpA when hit by a super-effective move
         if (
-            defender.item &&
+            activeItem(defender) &&
             defender.item.name === WEAKNESS_POLICY &&
             typeEff > 1 &&
             defender.hp[0] > 0
@@ -1413,7 +1608,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
 
         // Kee Berry: +1 Defense when hit by a physical move
         if (
-            defender.item &&
+            activeItem(defender) &&
             defender.item.name === KEE_BERRY &&
             move.damage_class.name === "physical" &&
             defender.hp[0] > 0 &&
@@ -1426,7 +1621,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         // Rocky Helmet: contact against the holder costs the attacker 1/6 max HP
         if (
             makesContact(attacker, move) &&
-            defender.item &&
+            activeItem(defender) &&
             defender.item.name === ROCKY_HELMET &&
             damage_number > 0 &&
             attacker.hp[0] > 0 &&
@@ -1440,7 +1635,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         // Sticky Barb: contact against the holder transfers it to the attacker (if it has none)
         if (
             makesContact(attacker, move) &&
-            defender.item &&
+            activeItem(defender) &&
             defender.item.name === STICKY_BARB &&
             damage_number > 0 &&
             !attacker.item
@@ -1458,6 +1653,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
                 damage: damage_number,
                 text,
                 field,
+                attackerTeam,
                 ...abilityApi(field),
             }, attacker);
             // ...and a hit that takes it to half HP or less can trigger Emergency Exit, Berserk...
@@ -1472,6 +1668,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         if (move.name === "knock-off" && isRemovable(defender.item) && !protectsItem(defender, attacker) && damage_number > 0) {
             text.push(pokemonNameToString(defender) + " lost its " + itemLabel(defender) + "!");
             consumeItem(defender);
+            defender.itemUsedThisTurn = false; // knocked away, not used
         }
 
         // Thief: steals the defender's item if the attacker isn't already holding one
@@ -1547,7 +1744,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             damage_number > 0 &&
             defender.hp[0] > 0 &&
             !preventsFlinch(defender, attacker) && // Inner Focus
-            !(defender.item && defender.item.name === COVERT_CLOAK) &&
+            !(activeItem(defender) && defender.item.name === COVERT_CLOAK) &&
             Math.random() * 100 < flinchChance
         ) {
             defender.flinched = true;
@@ -1568,6 +1765,10 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     // Knocking something out (Moxie, Beast Boost...)
     if (defender.hp[0] === 0 && attacker.hp[0] > 0 && totalDamage > 0) {
         runHook(attacker, "onKO", { defender, text, ...abilityApi(field) });
+    }
+    // Dragon Tail / Circle Throw throw the target out if it is still standing
+    if (FORCE_SWITCH_MOVES.has(move.name) && totalDamage > 0 && defender.hp[0] > 0) {
+        requestDrag(attacker, defender, defenderTeam, text, false);
     }
 
     if (move.meta && move.meta.drain > 0 && totalDamage > 0 && hasLiquidOoze(defender, attacker)) {
@@ -1655,7 +1856,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         damage_number > 0 &&
         !sheerForced &&
         !indirectDamageBlocked(attacker) &&
-        attacker.item &&
+        activeItem(attacker) &&
         attacker.item.name === LIFE_ORB
     ) {
         attacker.hp[0] = Math.max(0, attacker.hp[0] - Math.floor(attacker.hp[1] / 10));
@@ -1691,6 +1892,7 @@ export function doSwitch(pokemon, index, options = {}) {
     }
     resetAbilityState(oldCurrent); // undo Transform / borrowed abilities / Illusion
     oldCurrent.disabled = null;
+    oldCurrent.perish = null;
     resetStatChanges(oldCurrent); // Reset stat changes on switch out
     oldCurrent.lockedMove = null;
     oldCurrent.charging = null;
@@ -1729,8 +1931,11 @@ export function doSwitch(pokemon, index, options = {}) {
     // Abilities that trigger on entering (Intimidate, Illusion, Imposter...); the on-entry
     // text is tacked onto the switch line since callers expect a single string back
     text = text + "Switch in " + pokemonNameToString(pokemon[0]) + "!";
-    // Entry hazards hit first; a pokemon that faints to them never gets its ability going
+    pokemon[0].perish = null;
+    // Healing Wish / Lunar Dance heal the newcomer before anything else touches it
     const hazardText = [];
+    applyHealingWish(pokemon, hazardText);
+    // Entry hazards hit first; a pokemon that faints to them never gets its ability going
     applyHazards(pokemon[0], pokemon, hazardText, (p, changes, t) =>
         addArrayToArray(t, doStatChanges(p, { stat_changes: changes }))
     );
@@ -1766,7 +1971,7 @@ export function doMoveEffects(attacker, defender, move, opts = {}) {
     ) {
         if (opts.shieldDust) {
             // Shield Dust: the secondary stat drop just doesn't happen
-        } else if (defender.item && defender.item.name === COVERT_CLOAK) {
+        } else if (activeItem(defender) && defender.item.name === COVERT_CLOAK) {
             text.push(
                 pokemonNameToString(defender) +
                     "'s Covert Cloak protected it from the effect!"
@@ -1781,7 +1986,7 @@ export function doMoveEffects(attacker, defender, move, opts = {}) {
 }
 
 function tryConsumeWhiteHerb(pokemon, text) {
-    if (!pokemon.item || pokemon.item.name !== WHITE_HERB) return;
+    if (!activeItem(pokemon) || pokemon.item.name !== WHITE_HERB) return;
     if (pokemon.stat_levels.some((level) => level < 0)) {
         pokemon.stat_levels = pokemon.stat_levels.map((level) => Math.max(level, 0));
         text.push(pokemonNameToString(pokemon) + " restored its stats using its White Herb!");
@@ -1924,7 +2129,7 @@ function doEndOfTurn(pokemon, field, foe) {
         if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
     }
 
-    if (pokemon.hp[0] > 0 && pokemon.item) {
+    if (pokemon.hp[0] > 0 && activeItem(pokemon)) {
         if (pokemon.item.name === LEFTOVERS) {
             const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
             if (msg) text.push(msg);
@@ -1966,6 +2171,18 @@ function doEndOfTurn(pokemon, field, foe) {
         }
     }
 
+    // Perish Song / Perish Body count down and finally faint
+    if (pokemon.hp[0] > 0 && pokemon.perish != null) {
+        pokemon.perish -= 1;
+        if (pokemon.perish <= 0) {
+            pokemon.perish = null;
+            pokemon.hp[0] = 0;
+            text.push(pokemonNameToString(pokemon) + "'s perish count fell to 0!");
+            text.push(pokemonNameToString(pokemon) + " fainted!");
+            return text;
+        }
+        text.push(pokemonNameToString(pokemon) + "'s perish count fell to " + pokemon.perish + "!");
+    }
     // Abilities that act at the end of every turn (Cud Chew, Hunger Switch...)
     if (pokemon.hp[0] > 0) {
         runHook(pokemon, "onResidual", { field, foe, text, applyBerry: applyBerryEffect, ...abilityApi(field) });

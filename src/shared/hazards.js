@@ -2,6 +2,7 @@ import { isGrounded } from "./field";
 import { typeEffectiveness } from "./damagecalc";
 import { pokemonNameToString } from "./helpers";
 import { HEAVY_DUTY_BOOTS } from "./iteminfo";
+import { activeItem } from "./helditem";
 import { STATUS_IMMUNE_TYPES } from "./movemechanics";
 import { indirectDamageBlocked } from "./abilities";
 
@@ -71,7 +72,7 @@ const ROCK_MOVE = { type: { name: "rock" }, damage_class: { name: "physical" } }
 export function applyHazards(pokemon, team, text, boost) {
     const h = team.hazards;
     if (!h || pokemon.hp[0] <= 0) return;
-    if (pokemon.item && pokemon.item.name === HEAVY_DUTY_BOOTS) return;
+    if (activeItem(pokemon) && pokemon.item.name === HEAVY_DUTY_BOOTS) return;
     const name = pokemonNameToString(pokemon);
     const grounded = isGrounded(pokemon);
     const hurt = (amount, msg) => {

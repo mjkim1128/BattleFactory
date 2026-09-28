@@ -16,3 +16,4 @@ export * from './pp';
 export * from './field';
 export * from './abilities';
 export * from './hazards';
+export * from './helditem';

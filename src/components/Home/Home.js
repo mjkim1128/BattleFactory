@@ -21,6 +21,7 @@ import {
     restorePP,
     pickAbility,
     resetAbilityState,
+    resetBattleForms,
 } from "shared";
 import { keepsRawPower } from "shared/movemechanics";
 
@@ -65,6 +66,7 @@ export function Home() {
                 poke.actionsSinceSwitch = 0;
                 poke.activeTurns = 0;
                 resetAbilityState(poke); /// ability, Transform, Illusion... back to how it started
+                resetBattleForms(poke); /// Hero Palafin, Noice Eiscue... are back to their normal form
                 poke.disguiseBusted = false;
                 poke.hangry = false;
                 poke.disabled = null;
@@ -84,6 +86,9 @@ export function Home() {
             arr.hazards = null; /// Stealth Rock & co. are gone after the fight
             arr.pendingSwitch = null;
             arr.pivotRequest = null;
+            arr.healingWish = null; /// an unused Healing Wish / Lunar Dance is gone
+            arr.wish = null;
+            arr.dragRequest = false;
         }
         setPlayerPokemon(temp);
         setOpponentPokemon(dumb);
@@ -154,6 +159,11 @@ export function Home() {
         /// Ability: the real set's own ability when there is one, else one of the species' abilities
         pokemonData[i].ability = pickAbility(factorySet, pokemonData[i].abilities);
         pokemonData[i].baseAbility = pokemonData[i].ability; /// what it goes back to after Trace/Mummy/Transform
+        /// Klutz makes a held item useless, so those pokemon simply don't get one
+        if (pokemonData[i].ability && pokemonData[i].ability.name === "klutz") {
+            pokemonData[i].item = null;
+            pokemonData[i].originalItem = null;
+        }
         pokemonData[i].consumedItem = null;
         pokemonData[i].lockedMove = null;
         pokemonData[i].charging = null; // move it is mid-way through (Fly, Solar Beam, ...)

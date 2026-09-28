@@ -169,9 +169,74 @@ const skinAbility = (type) => ({
 });
 const recoilMove = (move) => (move.meta && move.meta.drain < 0 && move.name !== "struggle") || CRASH_MOVES.has(move.name);
 
-// Does this attacker's move ignore the target's breakable abilities?
+// Does this attacker's move ignore the target's breakable abilities? (Mycelium Might does it
+// only for its status moves, which turn.js flags for the length of the move.)
 export function ignoresAbilities(attacker) {
-    return MOLD_BREAKER_LIKE.has(abilityName(attacker));
+    return MOLD_BREAKER_LIKE.has(abilityName(attacker)) || !!attacker.ignoresAbilityNow;
+}
+
+// ---- form changes ----
+// The pokemon these abilities work on and the base stats of the form they change into
+// (Showdown's data/pokedex.ts). The pool only holds each species' default form.
+const FORMS = {
+    "darmanitan-standard": { zen: { stats: [105, 30, 105, 140, 105, 55], types: ["fire", "psychic"] } },
+    "aegislash-shield": { blade: { stats: [60, 140, 50, 140, 50, 60] } },
+    "wishiwashi-solo": { school: { stats: [45, 140, 130, 140, 135, 30] } },
+    "minior-red-meteor": { core: { stats: [60, 100, 60, 100, 60, 120] } },
+    "palafin-zero": { hero: { stats: [100, 160, 97, 106, 87, 100] } },
+    "eiscue-ice": { noice: { stats: [75, 80, 70, 65, 50, 130] } },
+};
+// Puts `pokemon` into a form; a persistent one (Hero, Noice Face) survives switching out.
+function changeForme(pokemon, forme, persistent = false) {
+    const def = FORMS[pokemon.name] && FORMS[pokemon.name][forme];
+    if (!def) return false;
+    if (!pokemon.formBackup) pokemon.formBackup = { base_stats: pokemon.base_stats, types: pokemon.types };
+    pokemon.base_stats = def.stats.slice();
+    if (def.types) pokemon.types = def.types.map((t, i) => ({ slot: i + 1, type: { name: t } }));
+    pokemon.forme = forme;
+    pokemon.formPersistent = persistent;
+    return true;
+}
+function revertForme(pokemon) {
+    if (pokemon.formBackup) {
+        pokemon.base_stats = pokemon.formBackup.base_stats;
+        pokemon.types = pokemon.formBackup.types;
+        pokemon.formBackup = null;
+    }
+    pokemon.forme = null;
+    pokemon.formPersistent = false;
+}
+// Everything a form change did, gone (a new battle starts from the default form)
+export function resetBattleForms(pokemon) {
+    revertForme(pokemon);
+}
+// Forms that follow the pokemon's HP: `low` when it is at or under `fraction` of its max HP
+const hpForm = (formName, fraction, lowIsForm, messages) => ({ self, text }) => {
+    if (self.hp[0] <= 0) return;
+    const low = self.hp[0] <= self.hp[1] * fraction;
+    const wantForm = lowIsForm ? low : !low;
+    if (wantForm && self.forme !== formName) {
+        if (changeForme(self, formName)) text.push(pokemonNameToString(self) + messages[0]);
+    } else if (!wantForm && self.forme === formName) {
+        revertForme(self);
+        text.push(pokemonNameToString(self) + messages[1]);
+    }
+};
+// Eiscue's Ice Face takes the first physical hit for it (turn.js calls this before damage);
+// returns true when the hit was absorbed.
+export function tryIceFace(defender, attacker, move, text) {
+    if (abilityName(defender) !== "ice-face" || defender.forme || move.damage_class.name !== "physical") return false;
+    if (ignoresAbilities(attacker)) return false;
+    changeForme(defender, "noice", true);
+    text.push(pokemonNameToString(defender) + "'s Ice Face took the hit and busted!");
+    return true;
+}
+
+// The pokemon's weight in hectograms (Light Metal halves it, Heavy Metal doubles it)
+export function weightOf(pokemon) {
+    const h = handlerOf(pokemon);
+    const weight = pokemon.weight || 0;
+    return h && h.weightMult ? Math.max(1, Math.floor(weight * h.weightMult)) : weight;
 }
 
 const jsonClone = (x) => JSON.parse(JSON.stringify(x));
@@ -853,6 +918,8 @@ export const ABILITIES = {
         },
     },
     "wonder-guard": { breakable: true, wonderGuard: true },
+    "light-metal": { weightMult: 0.5 },
+    "heavy-metal": { weightMult: 2 },
 
     // ---- moves that change type / priority ----
     pixilate: skinAbility("fairy"),
@@ -1062,6 +1129,7 @@ export const ABILITIES = {
     },
     "guard-dog": {
         breakable: true,
+        preventsDrag: true,
         onIntimidated({ self, text, boost }) {
             boost(self, [{ stat: { name: "attack" }, change: 1 }], text);
             return true;
@@ -1144,6 +1212,93 @@ export const ABILITIES = {
             if (damage > 0 && self.hp[0] > 0 && canSteal(self, defender)) stealItem(self, defender, text);
         },
     },
+
+
+    // ================= the rest: forms, perish, item pickup... =================
+
+    // ---- form changes ----
+    "zen-mode": {
+        onResidual: hpForm("zen", 0.5, true, [" triggered Zen Mode!", " returned to its standard form!"]),
+    },
+    schooling: {
+        onSwitchIn: hpForm("school", 0.25, false, [" formed a school!", " stopped schooling!"]),
+        onResidual: hpForm("school", 0.25, false, [" formed a school!", " stopped schooling!"]),
+    },
+    "shields-down": {
+        onSwitchIn: hpForm("core", 0.5, true, ["'s Shields Down broke its shell!", " covered its core again!"]),
+        onResidual: hpForm("core", 0.5, true, ["'s Shields Down broke its shell!", " covered its core again!"]),
+        // in its Meteor form nothing gets through
+        onSetStatus({ self }) {
+            return self.forme !== "core" ? true : undefined;
+        },
+    },
+    "stance-change": {
+        onPrepareMove({ self, move, text }) {
+            if (move.damage_class.name !== "status" && self.forme !== "blade" && changeForme(self, "blade")) {
+                text.push(pokemonNameToString(self) + " changed to Blade Forme!");
+            }
+        },
+    },
+    "zero-to-hero": {
+        onSwitchOut({ self, text }) {
+            if (self.forme !== "hero" && changeForme(self, "hero", true)) {
+                text.push(pokemonNameToString(self) + " underwent a heroic transformation!");
+            }
+        },
+    },
+    "ice-face": {
+        breakable: true,
+        onUpdate({ self, field, text }) {
+            if (self.forme === "noice" && isHail(field)) {
+                revertForme(self);
+                text.push(pokemonNameToString(self) + "'s Ice Face was restored!");
+            }
+        },
+    },
+
+    // ---- contact reactions ----
+    "lingering-aroma": {
+        onDamagingHit({ attacker, move, text }) {
+            if (!makesContact(attacker, move)) return;
+            const theirs = abilityName(attacker);
+            if (!theirs || LOCKED_ABILITIES.has(theirs) || theirs === "lingering-aroma") return;
+            attacker.ability = getAbility("lingering-aroma");
+            text.push(pokemonNameToString(attacker) + "'s ability became Lingering Aroma!");
+        },
+    },
+    "perish-body": {
+        onDamagingHit({ self, attacker, move, text }) {
+            if (!makesContact(attacker, move) || (self.perish != null && attacker.perish != null)) return;
+            text.push(pokemonNameToString(self) + "'s Perish Body: both will faint in three turns!");
+            if (self.perish == null) self.perish = 4;
+            if (attacker.perish == null) attacker.perish = 4;
+        },
+    },
+    "toxic-debris": {
+        onDamagingHit({ move, damage, attackerTeam, layHazard, text }) {
+            if (damage > 0 && move.damage_class.name === "physical" && attackerTeam) layHazard(attackerTeam, "toxicSpikes", text);
+        },
+    },
+
+    // ---- items ----
+    "aroma-veil": { breakable: true, preventsDisable: true },
+    pickup: {
+        onResidual({ self, foe, text }) {
+            if (self.hp[0] <= 0 || self.item || !foe || !foe.itemUsedThisTurn || !foe.consumedItem) return;
+            self.item = foe.consumedItem;
+            foe.consumedItem = null;
+            text.push(pokemonNameToString(self) + " found one " + itemLabelOf(self) + "!");
+        },
+    },
+    // Status moves go last in their priority bracket and ignore the target's ability
+    "mycelium-might": { slowStatusMoves: true },
+    // Roar, Whirlwind, Dragon Tail and Circle Throw can't drag it out
+    "suction-cups": { breakable: true, preventsDrag: true },
+    // Copies the stat boosts the other side gets (turn.js compares stages around every action)
+    opportunist: { copiesFoeBoosts: true },
+    // Its item has no effect (see activeItem in helditem.js). It can still be handed one by Trick
+    // and the like; the game just never gives one to a Klutz pokemon to start with (see Home.js).
+    klutz: {},
 
     // ---- knocking something out ----
     "soul-heart": {
@@ -1303,6 +1458,10 @@ export const hasNoGuard = (pokemon) => flag(pokemon, "noGuard");
 export const ignoresEvasion = (pokemon) => flag(pokemon, "ignoresEvasion"); // Keen Eye / Illuminate
 export const canPoisonAnything = (pokemon) => flag(pokemon, "poisonsAnything"); // Corrosion
 export const hasEarlyBird = (pokemon) => flag(pokemon, "earlyBird");
+export const preventsDisable = (pokemon, attacker = null) => flag(pokemon, "preventsDisable", attacker); // Aroma Veil
+export const hasSlowStatusMoves = (pokemon) => flag(pokemon, "slowStatusMoves"); // Mycelium Might
+export const preventsDrag = (pokemon, attacker = null) => flag(pokemon, "preventsDrag", attacker); // Suction Cups, Guard Dog
+export const copiesFoeBoosts = (pokemon) => flag(pokemon, "copiesFoeBoosts"); // Opportunist
 export const halvesBurnDamage = (pokemon) => flag(pokemon, "halvesBurn");
 export const hasLiquidOoze = (pokemon, attacker = null) => flag(pokemon, "liquidOoze", attacker);
 export const suppressesWeather = (pokemon) => flag(pokemon, "suppressesWeather");
@@ -1435,6 +1594,10 @@ export function resetAbilityState(pokemon) {
     pokemon.flashFire = false;
     pokemon.proteanUsed = false;
     pokemon.boosterStat = null; // Protosynthesis / Quark Drive
+    pokemon.perish = null;
+    pokemon.itemUsedThisTurn = false;
+    pokemon.ignoresAbilityNow = false;
+    if (!pokemon.formPersistent) revertForme(pokemon); // Zen Mode, Blade Forme, School... (Hero and Noice stay)
     pokemon.movedThisTurn = false;
     pokemon.unnerved = false;
     if (pokemon.baseTypes) {

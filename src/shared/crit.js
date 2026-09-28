@@ -1,5 +1,6 @@
 import { ALWAYS_CRIT_MOVES } from "./movemechanics";
 import { SCOPE_LENS } from "./iteminfo";
+import { activeItem } from "./helditem";
 import { critImmune, critStageBonus } from "./abilities";
 
 // Critical hits (Showdown, gen 7+ rules). The crit "stage" starts at the move's own crit
@@ -10,7 +11,7 @@ const CRIT_DENOMINATOR = [24, 8, 2, 1];
 export function critStage(attacker, move) {
     let stage = (move.meta && move.meta.crit_rate) || 0;
     if (attacker.focusEnergy) stage += 2; // Focus Energy
-    if (attacker.item && attacker.item.name === SCOPE_LENS) stage += 1;
+    if (activeItem(attacker) && attacker.item.name === SCOPE_LENS) stage += 1;
     stage += critStageBonus(attacker); // Super Luck
     return stage;
 }

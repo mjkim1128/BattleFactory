@@ -67,6 +67,8 @@ export const SLICING_MOVES = new Set(MECHANICS.slicing);
 export const SOUND_MOVES = new Set(MECHANICS.sound);
 export const BULLET_MOVES = new Set(MECHANICS.bullet);
 export const WIND_MOVES = new Set(MECHANICS.wind);
+// Roar / Whirlwind / Dragon Tail / Circle Throw drag the target out, a random pokemon coming in
+export const FORCE_SWITCH_MOVES = new Set(["roar", "whirlwind", "dragon-tail", "circle-throw"]);
 // Damp stops these
 export const EXPLOSIVE_MOVES = new Set(["explosion", "self-destruct", "mind-blown", "misty-explosion"]);
 

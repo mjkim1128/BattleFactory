@@ -2,6 +2,7 @@
 // terrain conditions inside data/moves.ts. The field lives on both team arrays as the
 // same shared object: { weather: {name, turns} | null, terrain: {name, turns} | null }.
 import { WEATHER_ROCKS } from "./iteminfo";
+import { activeItem } from "./helditem";
 
 export const WEATHER_MOVES = {
     "sunny-day": "sun",
@@ -68,9 +69,9 @@ export function terrainOf(field) {
 // Grounded pokemon are the ones terrain affects: not Flying-type, not holding an Air
 // Balloon, and (Iron Ball aside) not levitating. `levitates` is a hook for abilities.
 export function isGrounded(pokemon) {
-    if (pokemon.item && pokemon.item.name === "iron-ball") return true;
+    if (activeItem(pokemon) && pokemon.item.name === "iron-ball") return true;
     if (pokemon.types.some((t) => t.type.name === "flying")) return false;
-    if (pokemon.item && pokemon.item.name === "air-balloon") return false;
+    if (activeItem(pokemon) && pokemon.item.name === "air-balloon") return false;
     if (pokemon.levitates) return false;
     if (pokemon.ability && pokemon.ability.name === "levitate") return false;
     return true;
@@ -80,7 +81,7 @@ export function isGrounded(pokemon) {
 // pokemon that set it: a rock item makes it last 8 turns instead of 5.
 export function setWeather(field, name, holder, text) {
     if (weatherOf(field) === name) return false;
-    const rock = holder && holder.item && WEATHER_ROCKS[name] === holder.item.name;
+    const rock = holder && activeItem(holder) && WEATHER_ROCKS[name] === holder.item.name;
     field.weather = { name, turns: rock ? 8 : 5 };
     text.push(WEATHER_START[name]);
     return true;

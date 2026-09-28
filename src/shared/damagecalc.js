@@ -1,4 +1,5 @@
 import { PogeyData } from "./pogey";
+import { activeItem } from "./helditem";
 import {
     TYPE_BOOST_ITEMS,
     CHOICE_ITEMS,
@@ -20,6 +21,7 @@ import {
     abilityDefenseMod,
     abilityCritMultiplier,
     isWonderGuard,
+    weightOf,
     abilityStabMultiplier,
     absorbsMove,
     ignoresBoosts,
@@ -27,6 +29,23 @@ import {
     isGroundImmune,
     ignoresGhostImmunity,
 } from "./abilities";
+
+// Grass Knot / Low Kick hit harder the heavier the target is; Heavy Slam / Heat Crash the
+// heavier the user is compared with it (weights in hectograms, as PokeAPI has them).
+// Returns null for every other move.
+export function weightPower(move, attacker, defender) {
+    if (!defender.weight) return null;
+    if (move.name === "grass-knot" || move.name === "low-kick") {
+        const w = weightOf(defender);
+        return w < 100 ? 20 : w < 250 ? 40 : w < 500 ? 60 : w < 1000 ? 80 : w < 2000 ? 100 : 120;
+    }
+    if (move.name === "heavy-slam" || move.name === "heat-crash") {
+        if (!attacker.weight) return null;
+        const ratio = weightOf(attacker) / Math.max(1, weightOf(defender));
+        return ratio >= 5 ? 120 : ratio >= 4 ? 100 : ratio >= 3 ? 80 : ratio >= 2 ? 60 : 40;
+    }
+    return null;
+}
 
 export function typeEffectiveness(move, defender, attacker = null) {
     // Status moves aren't affected by the type chart (Trick vs Dark, Hypnosis vs Dark,
@@ -43,7 +62,7 @@ export function typeEffectiveness(move, defender, attacker = null) {
     if (move.type.name === "ground" && isGroundImmune(defender, attacker)) return 0;
     if (
         move.type.name === "ground" &&
-        defender.item &&
+        activeItem(defender) &&
         defender.item.name === AIR_BALLOON
     )
         return 0; // Air Balloon grounds immunity, popped separately once the holder is hit by anything else
@@ -69,6 +88,9 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     const { crit = false, field = null } = ctx;
     let type = typeEffectiveness(move, defender, attacker);
     if (absorbsMove(defender, attacker, move)) return 0; // Water Absorb & co. take it instead
+    // Final Gambit deals exactly the user's remaining HP, whatever the stats and type chart say
+    // (a type immunity still stops it)
+    if (move.name === "final-gambit") return type === 0 ? 0 : attacker.hp[0];
     let category = move.damage_class.name;
     let [attack, defense] =
         category === "physical"
@@ -91,14 +113,14 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     if (ignoresBoosts(defender, attacker)) attack_level = 0;
 
     // Choice Band/Specs: 1.5x the stat that matches this move's category
-    const choiceStatIndex = attacker.item && CHOICE_ITEMS[attacker.item.name];
+    const choiceStatIndex = activeItem(attacker) && CHOICE_ITEMS[attacker.item.name];
     if (
         (choiceStatIndex === 1 && category === "physical") ||
         (choiceStatIndex === 3 && category === "special")
     )
         attack = Math.floor(attack * 1.5);
     // Eviolite: 1.5x both defenses
-    if (defender.item && defender.item.name === EVIOLITE)
+    if (activeItem(defender) && defender.item.name === EVIOLITE)
         defense = Math.floor(defense * 1.5);
 
     attack = statCalc(attack, attack_level);
@@ -118,6 +140,8 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
         attack = Math.floor(attack / 2);
 
     let power = move.priority < 0 ? move.power * 2 : move.power; // Double power of negative priority moves
+    const weighted = weightPower(move, attacker, defender);
+    if (weighted !== null) power = weighted;
 
     // Fling: power comes from whatever the attacker is holding, not the move's own base power
     if (move.name === "fling" && attacker.item) power = getFlingPower(attacker.item.name);
@@ -125,7 +149,7 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     if (move.name === "knock-off" && defender.item && !UNREMOVABLE_ITEMS.has(defender.item.name))
         power *= 1.5;
 
-    if (attacker.item) {
+    if (activeItem(attacker)) {
         const boostedType = TYPE_BOOST_ITEMS[attacker.item.name];
         if (boostedType && move.type.name === boostedType) power *= 1.2;
         if (attacker.item.name === EXPERT_BELT && type > 1) power *= 1.2;

@@ -1,5 +1,6 @@
 import { OHKO_MOVES, IGNORE_EVASION_MOVES } from "./movemechanics";
 import { WIDE_LENS } from "./iteminfo";
+import { activeItem } from "./helditem";
 import { weatherAccuracy } from "./field";
 import { abilityAccuracyMod, abilityEvasionMod, ignoresBoosts, ignoresEvasion, hasNoGuard } from "./abilities";
 
@@ -57,7 +58,7 @@ export function hitChance(attacker, defender, move, field = null) {
     }
 
     let accuracy = base;
-    if (attacker.item && attacker.item.name === WIDE_LENS) {
+    if (activeItem(attacker) && attacker.item.name === WIDE_LENS) {
         accuracy = Math.floor((accuracy * 4505) / 4096); // Wide Lens: x1.1
     }
     // Compound Eyes (x1.3) / Victory Star (x1.1)
