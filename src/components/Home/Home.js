@@ -55,6 +55,9 @@ export function Home() {
                 poke.lockedMove = null;
                 poke.lastMoveName = null;
                 poke.moveRepeatCount = 0;
+                /// Held items are restored too, like the rest of the Pokemon Center reset
+                if (poke.originalItem !== undefined) poke.item = poke.originalItem;
+                poke.consumedItem = null;
             }
             /// Reflect/Light Screen live on the team array itself, not on a pokemon
             arr.reflectTurns = 0;
@@ -123,6 +126,10 @@ export function Home() {
             factorySet && factorySet.item
                 ? await getItemByName(factorySet.item)
                 : await generateRandomItem(pokemonData[i].name);
+        /// Remembered so the item can be restored after every battle, whatever happened to
+        /// it in the fight (eaten, popped, knocked off, stolen, traded away).
+        pokemonData[i].originalItem = pokemonData[i].item;
+        pokemonData[i].consumedItem = null;
         pokemonData[i].lockedMove = null;
         pokemonData[i].lastMoveName = null;
         pokemonData[i].moveRepeatCount = 0;
