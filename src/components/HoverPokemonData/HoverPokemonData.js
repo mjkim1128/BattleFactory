@@ -4,16 +4,12 @@ import {
     pokemonNameToString,
     pokemonTypeToString,
     statNameToString,
+    abilityLabel,
 } from "shared";
 import React from "react";
 import "./HoverPokemonData.css";
 
 export function HoverPokemonData(props) {
-    const abilities = [];
-    for (let i = 0; i < props.pokemon.abilities.length; i++) {
-        abilities.push(props.pokemon.abilities[i].ability.name + " ");
-    }
-
     const stat_names = [
         "attack",
         "defense",
@@ -64,8 +60,9 @@ export function HoverPokemonData(props) {
                     {props.pokemon.item.korean_name || props.pokemon.item.name}
                 </p>
             )}
-            {/* <p>Abilities: {abilities}</p>
-            <p>Weight: {props.pokemon.weight}</p> */}
+            {props.pokemon.ability && !props.pokemon.illusion && (
+                <p className="hover-pokemon-ability">특성: {abilityLabel(props.pokemon)}</p>
+            )}
             <StatsDisplay pokemon={props.pokemon} />
             {props.pokemon.hp[0] > 0 && stat_levels.length > 0 && (
                 <div>

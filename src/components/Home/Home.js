@@ -18,6 +18,9 @@ import {
     DEFAULT_MOVES,
     pickFactorySet,
     resolveFactoryMoveSlugs,
+    restorePP,
+    pickAbility,
+    resetAbilityState,
 } from "shared";
 import { keepsRawPower } from "shared/movemechanics";
 
@@ -56,6 +59,15 @@ export function Home() {
                 poke.lockedMove = null;
                 poke.charging = null;
                 poke.mustRecharge = false;
+                poke.flinched = false;
+                poke.trap = null;
+                poke.focusEnergy = false;
+                poke.actionsSinceSwitch = 0;
+                poke.activeTurns = 0;
+                resetAbilityState(poke); /// ability, Transform, Illusion... back to how it started
+                poke.disguiseBusted = false;
+                poke.hangry = false;
+                restorePP(poke); /// PP is topped up in the Pokemon Center too
                 poke.lastMoveName = null;
                 poke.moveRepeatCount = 0;
                 /// Held items are restored too, like the rest of the Pokemon Center reset
@@ -65,6 +77,9 @@ export function Home() {
             /// Reflect/Light Screen live on the team array itself, not on a pokemon
             arr.reflectTurns = 0;
             arr.lightScreenTurns = 0;
+            arr.auroraTurns = 0;
+            arr.field = null; /// weather and terrain don't carry over into the next battle
+            arr.entered = false; /// on-entry abilities fire again at the start of the next battle
             arr.pendingSwitch = null;
             arr.pivotRequest = null;
         }
@@ -134,6 +149,9 @@ export function Home() {
         /// Remembered so the item can be restored after every battle, whatever happened to
         /// it in the fight (eaten, popped, knocked off, stolen, traded away).
         pokemonData[i].originalItem = pokemonData[i].item;
+        /// Ability: the real set's own ability when there is one, else one of the species' abilities
+        pokemonData[i].ability = pickAbility(factorySet, pokemonData[i].abilities);
+        pokemonData[i].baseAbility = pokemonData[i].ability; /// what it goes back to after Trace/Mummy/Transform
         pokemonData[i].consumedItem = null;
         pokemonData[i].lockedMove = null;
         pokemonData[i].charging = null; // move it is mid-way through (Fly, Solar Beam, ...)

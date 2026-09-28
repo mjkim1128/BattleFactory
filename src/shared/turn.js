@@ -7,6 +7,34 @@ import {
 } from "./helpers";
 import { CONTACT_MOVES } from "./legalmoves";
 import { FOE_TARGETS, isOhkoMove, ohkoImmune, rollAccuracy } from "./accuracy";
+import { spendPP } from "./pp";
+import { rollCrit } from "./crit";
+import {
+    abilityName,
+    abilityBlocksStatus,
+    bouncesMoves,
+    ignoresAbilities,
+    runHook,
+    resetAbilityState,
+} from "./abilities";
+import {
+    ensureField,
+    weatherOf,
+    terrainOf,
+    isGrounded,
+    setWeather,
+    setTerrain,
+    tickWeather,
+    tickTerrain,
+    adaptMoveToField,
+    WEATHER_MOVES,
+    TERRAIN_MOVES,
+    weatherBlocksStatus,
+    terrainBlocksStatus,
+    terrainBlocksPriority,
+    weatherHealPercent,
+    weatherEndOfTurnDamage,
+} from "./field";
 import {
     DEFROST_MOVES,
     THAWS_TARGET_MOVES,
@@ -22,6 +50,11 @@ import {
     CHARGE_TURN_BOOSTS,
     ROLLS_ACCURACY_EACH_HIT,
     ESCALATING_MULTIHIT,
+    BINDING_MOVES,
+    TRAPPING_MOVES,
+    FIRST_TURN_ONLY_MOVES,
+    REFLECTABLE_MOVES,
+    DANCE_MOVES,
 } from "./movemechanics";
 import {
     RESIST_BERRIES,
@@ -49,6 +82,7 @@ import {
     POWER_HERB,
     LOADED_DICE,
     STATUS_CURE_BERRIES,
+    SHED_SHELL,
 } from "./iteminfo";
 
 function hasCustapBoost(pokemon) {
@@ -62,6 +96,10 @@ function hasCustapBoost(pokemon) {
 // Consuming an item (eating a berry, popping a balloon, etc.) stashes it as the pokemon's
 // "last consumed item" instead of just discarding it, so Recycle can restore it later.
 function consumeItem(pokemon) {
+    // Cud Chew: a berry that gets eaten is eaten again at the end of the next turn
+    if (pokemon.item && pokemon.item.name.endsWith("-berry") && abilityName(pokemon) === "cud-chew") {
+        pokemon.cudChew = { berry: pokemon.item, turns: 2 };
+    }
     pokemon.consumedItem = pokemon.item;
     pokemon.item = null;
 }
@@ -141,11 +179,48 @@ function forcedMove(pokemon, chosenMove) {
     return pokemon.moveset.find((m) => m.name === pokemon.charging) || chosenMove;
 }
 
+// A pokemon that is trapped (Wrap, Mean Look, ...) can't switch out by choice. Pivot moves
+// and Baton Pass still get it out, and a Shed Shell holder slips free. It only lasts while
+// whoever trapped it is still out on the field.
+export function isTrapped(team, foeTeam) {
+    const pokemon = team[0];
+    const trap = pokemon.trap;
+    if (!trap) return false;
+    if (foeTeam[0] !== trap.source || foeTeam[0].hp[0] <= 0) return false;
+    if (pokemon.item && pokemon.item.name === SHED_SHELL) return false;
+    return true;
+}
+
 export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
-    const move = forcedMove(playerPokemon[0], chosenMove);
+    ensureField(playerPokemon, opponentPokemon);
+    const field = playerPokemon.field;
+    playerPokemon.isPlayerSide = true;
+    opponentPokemon.isPlayerSide = false;
+    // Abilities that trigger on entering (Intimidate, Illusion, Imposter...) go off for both
+    // starting pokemon before the first turn's moves, the faster one first.
+    const entryText = [];
+    if (!playerPokemon.entered) {
+        playerPokemon.entered = true;
+        opponentPokemon.entered = true;
+        const order = getEffectiveSpeed(playerPokemon[0]) >= getEffectiveSpeed(opponentPokemon[0])
+            ? [playerPokemon, opponentPokemon]
+            : [opponentPokemon, playerPokemon];
+        for (const team of order) {
+            addArrayToArray(entryText, runEntryAbilities(team, team === playerPokemon ? opponentPokemon : playerPokemon, field));
+        }
+    }
+    // The button the player pressed can be a snapshot copy, so find the real move (its PP
+    // is what gets spent). A switch has no name to look up.
+    let move = chosenMove;
+    if (move.priority !== 6) {
+        move = playerPokemon[0].moveset.find((m) => m.name === move.name) || move;
+    }
+    move = forcedMove(playerPokemon[0], move);
     const cpuMove = forcedMove(opponentPokemon[0], makeMove(playerPokemon, opponentPokemon));
-    let playerPriority = move.priority + (hasCustapBoost(playerPokemon[0]) ? 1 : 0);
-    let cpuPriority = cpuMove.priority + (hasCustapBoost(opponentPokemon[0]) ? 1 : 0);
+    const priorityOf = (mv, mon) =>
+        (mv.priority === 6 ? 6 : adaptMoveToField(mv, mon, field).priority) + (hasCustapBoost(mon) ? 1 : 0);
+    let playerPriority = priorityOf(move, playerPokemon[0]);
+    let cpuPriority = priorityOf(cpuMove, opponentPokemon[0]);
     let movefirst = playerPriority > cpuPriority ? true : false;
     if (playerPriority === cpuPriority) {
         movefirst =
@@ -153,7 +228,16 @@ export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
                 ? true
                 : false;
     }
-    return runTurn(playerPokemon, opponentPokemon, { playerFirst: movefirst, move, cpuMove }, 0);
+    return addArrayToArray(entryText, runTurn(playerPokemon, opponentPokemon, { playerFirst: movefirst, move, cpuMove }, 0));
+}
+
+// The on-entry abilities of `team`'s active pokemon; returns the lines they produced.
+function runEntryAbilities(team, foeTeam, field) {
+    const text = [];
+    const self = team[0];
+    runHook(self, "onSwitchIn", { foe: foeTeam[0], selfTeam: team, foeTeam, field, text, selfIsPlayer: !!team.isPlayerSide }, foeTeam[0]);
+    runHook(self, "onUpdate", { field, text });
+    return text;
 }
 
 // Plays out a turn from `step` onward: step 0 is whoever moves first, step 1 the other,
@@ -162,32 +246,51 @@ export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
 // plan is parked on the team as pendingSwitch and resumeTurn() picks it back up.
 function runTurn(playerPokemon, opponentPokemon, plan, step) {
     let text = [];
+    const field = ensureField(playerPokemon, opponentPokemon);
     for (; step < 2; step++) {
         const isPlayer = (step === 0) === plan.playerFirst;
         const team = isPlayer ? playerPokemon : opponentPokemon;
         const foeTeam = isPlayer ? opponentPokemon : playerPokemon;
         const move = isPlayer ? plan.move : plan.cpuMove;
         if (step === 1 && team[0].hp[0] <= 0) return text;
+        // A side that was switched out (Emergency Exit) before it got to move loses its action
+        if (plan.skipSide === (isPlayer ? "player" : "cpu")) continue;
         if (hasCustapBoost(team[0])) consumeItem(team[0]);
         text = addArrayToArray(text, playerTurn(team, foeTeam, move));
+        for (const t of [playerPokemon, opponentPokemon]) runHook(t[0], "onUpdate", { field, text });
 
-        const pivot = team.pivotRequest;
-        team.pivotRequest = null;
-        if (!pivot) continue;
-        if (isPlayer) {
-            playerPokemon.pendingSwitch = { plan, nextStep: step + 1, baton: pivot.baton };
-            return text;
+        // Either side can end up wanting to switch: the mover (U-turn...) or the one it hit
+        // (Emergency Exit). The CPU switches straight away; the player is asked.
+        for (const swapper of [team, foeTeam]) {
+            const pivot = swapper.pivotRequest;
+            swapper.pivotRequest = null;
+            if (!pivot) continue;
+            const swapperIsPlayer = swapper === playerPokemon;
+            const swapperActsLater = swapper === foeTeam && step === 0;
+            if (swapperIsPlayer) {
+                if (swapperActsLater) plan.skipSide = "player";
+                playerPokemon.pendingSwitch = { plan, nextStep: step + 1, baton: pivot.baton };
+                return text;
+            }
+            const index = switchPokemon(playerPokemon, opponentPokemon);
+            if (index !== -1) {
+                if (swapperActsLater) plan.skipSide = "cpu";
+                text.push(doSwitch(opponentPokemon, index, { baton: pivot.baton, foeTeam: playerPokemon }));
+            }
         }
-        // The CPU picks its own replacement straight away
-        const index = switchPokemon(playerPokemon, opponentPokemon);
-        if (index !== -1) text.push(doSwitch(opponentPokemon, index, { baton: pivot.baton }));
     }
-    text = addArrayToArray(text, doEndOfTurn(playerPokemon[0]));
-    text = addArrayToArray(text, doEndOfTurn(opponentPokemon[0]));
-    if (playerPokemon.reflectTurns > 0) playerPokemon.reflectTurns -= 1;
-    if (playerPokemon.lightScreenTurns > 0) playerPokemon.lightScreenTurns -= 1;
-    if (opponentPokemon.reflectTurns > 0) opponentPokemon.reflectTurns -= 1;
-    if (opponentPokemon.lightScreenTurns > 0) opponentPokemon.lightScreenTurns -= 1;
+    // The weather counts down first (a 5-turn weather deals its damage 4 times, then ends)
+    tickWeather(field, text);
+    text = addArrayToArray(text, doEndOfTurn(playerPokemon[0], field, opponentPokemon[0]));
+    text = addArrayToArray(text, doEndOfTurn(opponentPokemon[0], field, playerPokemon[0]));
+    tickTerrain(field, text);
+    for (const team of [playerPokemon, opponentPokemon]) {
+        if (team.reflectTurns > 0) team.reflectTurns -= 1;
+        if (team.lightScreenTurns > 0) team.lightScreenTurns -= 1;
+        if (team.auroraTurns > 0) team.auroraTurns -= 1;
+        team[0].flinched = false; // a flinch only ever lasts the turn it happens in
+        team[0].activeTurns = (team[0].activeTurns || 0) + 1;
+    }
     return text;
 }
 
@@ -196,83 +299,140 @@ export function resumeTurn(playerPokemon, opponentPokemon, index) {
     const pending = playerPokemon.pendingSwitch;
     playerPokemon.pendingSwitch = null;
     if (!pending) return [];
-    const text = [doSwitch(playerPokemon, index, { baton: pending.baton })];
+    const text = [doSwitch(playerPokemon, index, { baton: pending.baton, foeTeam: opponentPokemon })];
     return addArrayToArray(
         text,
         runTurn(playerPokemon, opponentPokemon, pending.plan, pending.nextStep)
     );
 }
 
-export function playerTurn(playerPokemon, opponentPokemon, move) {
+export function playerTurn(playerPokemon, opponentPokemon, chosenMove) {
     let text = [];
+    ensureField(playerPokemon, opponentPokemon);
     /// Move is switch
-    if (move.priority === 6) {
-        text.push(doSwitch(playerPokemon, move.index));
+    if (chosenMove.priority === 6) {
+        if (isTrapped(playerPokemon, opponentPokemon)) {
+            text.push(pokemonNameToString(playerPokemon[0]) + " can't escape!");
+            return text;
+        }
+        text.push(doSwitch(playerPokemon, chosenMove.index, { foeTeam: opponentPokemon }));
         return text;
     }
     /// Move is attack
     const attacker = playerPokemon[0];
+    attacker.actionsSinceSwitch = (attacker.actionsSinceSwitch || 0) + 1;
     // The turn after a recharge move (Hyper Beam, ...) is spent recharging
     if (attacker.mustRecharge) {
         attacker.mustRecharge = false;
         text.push(pokemonNameToString(attacker) + " must recharge!");
         return text;
     }
-    if (!canAct(attacker, text, move)) {
+    if (!canAct(attacker, text, chosenMove)) {
         attacker.charging = null; // being stopped mid-charge wastes the move
         return text;
     }
 
-    if (trySetupScreen(playerPokemon, move, text)) return text;
-    if (tryStartCharge(attacker, move, text)) return text;
+    // Using a move spends a PP (the second turn of a two-turn move is free)
+    if (attacker.charging !== chosenMove.name) spendPP(chosenMove);
+    executeMove(playerPokemon, opponentPokemon, chosenMove, text, {});
+    return text;
+}
 
-    // A pokemon that is up in the air / underground / underwater can't be reached
-    if (isUnreachable(opponentPokemon[0], move)) {
-        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
-        text.push(pokemonNameToString(opponentPokemon[0]) + " avoided the attack!");
-        return text;
-    }
+// Carries out a move that has already been paid for (PP spent, able to act): the same steps
+// whether the pokemon picked it, a Magic Bounce sent it back (opts.bounced) or Dancer copied
+// it (opts.copied). Everything it says goes into `text`.
+function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
+    const field = ensureField(playerPokemon, opponentPokemon);
+    const attacker = playerPokemon[0];
+    // Weather Ball, Terrain Pulse and Grassy Glide change with the field
+    const move = adaptMoveToField(chosenMove, attacker, field);
+
+    if (trySetupScreen(playerPokemon, move, text, field)) return;
+    if (tryStartCharge(attacker, move, text, field)) return;
 
     const foe = opponentPokemon[0];
+    // Fake Out / First Impression only work on the turn right after switching in
+    if (FIRST_TURN_ONLY_MOVES.has(move.name) && attacker.actionsSinceSwitch > 1) {
+        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+        text.push("But it failed!");
+        return;
+    }
+
+    // A pokemon that is up in the air / underground / underwater can't be reached
+    if (isUnreachable(foe, move)) {
+        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+        text.push(pokemonNameToString(foe) + " avoided the attack!");
+        return;
+    }
+    // Psychic Terrain shields grounded pokemon from priority moves
+    if (foe.hp[0] > 0 && aimsAtFoe(move) && terrainBlocksPriority(move, foe, field)) {
+        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+        text.push(pokemonNameToString(foe) + " is protected by the Psychic Terrain!");
+        return;
+    }
+
+    // Magic Bounce: a status move aimed at this pokemon is sent straight back at the user
+    if (
+        !opts.bounced &&
+        foe.hp[0] > 0 &&
+        move.damage_class.name === "status" &&
+        aimsAtFoe(move) &&
+        REFLECTABLE_MOVES.has(move.name) &&
+        bouncesMoves(foe, attacker)
+    ) {
+        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+        text.push(pokemonNameToString(foe) + "'s Magic Bounce bounced the move back!");
+        executeMove(opponentPokemon, playerPokemon, { ...chosenMove }, text, { bounced: true });
+        return;
+    }
+
     // One-hit KO moves can't touch an immune type (Sheer Cold vs Ice)
     if (foe.hp[0] > 0 && ohkoImmune(foe, move)) {
         text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
         text.push("It doesn't affect " + pokemonNameToString(foe) + "!");
-        return text;
+        return;
     }
     // Accuracy is checked after immunity, before anything happens (like Showdown)
-    if (foe.hp[0] > 0 && typeEffectiveness(move, foe) !== 0 && !rollAccuracy(attacker, foe, move)) {
+    if (foe.hp[0] > 0 && typeEffectiveness(move, foe) !== 0 && !rollAccuracy(attacker, foe, move, field)) {
         text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
         text.push(pokemonNameToString(attacker) + "'s attack missed!");
         if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
             attacker.lockedMove = move.name; // a missed move still locks a Choice item
         tryCrashDamage(attacker, move, text);
-        return text;
+        return;
     }
 
-    text = addArrayToArray(
-        text,
-        turnText(attacker, opponentPokemon[0], move)
-    );
-    if (typeEffectiveness(move, opponentPokemon[0]) === 0) tryCrashDamage(attacker, move, text);
-    if (typeEffectiveness(move, opponentPokemon[0]) !== 0) {
-        text = addArrayToArray(
-            text,
-            doAttack(attacker, opponentPokemon[0], move, opponentPokemon)
-        );
+    addArrayToArray(text, turnText(attacker, foe, move));
+    if (typeEffectiveness(move, foe) === 0) tryCrashDamage(attacker, move, text);
+    if (typeEffectiveness(move, foe) !== 0) {
+        addArrayToArray(text, doAttack(attacker, foe, move, opponentPokemon));
         trackMetronome(attacker, move);
         if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
             attacker.lockedMove = move.name;
         /// temporary fix for moves giving me errors
         if (move.meta !== undefined)
-            text = addArrayToArray(
-                text,
-                doMoveEffects(attacker, opponentPokemon[0], move)
-            );
+            addArrayToArray(text, doMoveEffects(attacker, foe, move));
         if (RECHARGE_MOVES.has(move.name) && attacker.hp[0] > 0) attacker.mustRecharge = true;
-        tryRequestPivot(playerPokemon, opponentPokemon[0], move, text);
+        tryRequestPivot(playerPokemon, foe, move, text);
+        runHook(attacker, "onAfterMove", { foe, move, text });
     }
-    return text;
+
+    // Dancer: the other side copies a dance move right after it is used
+    if (
+        !opts.copied &&
+        DANCE_MOVES.has(move.name) &&
+        foe.hp[0] > 0 &&
+        attacker.hp[0] > 0 &&
+        abilityName(foe) === "dancer"
+    ) {
+        text.push(pokemonNameToString(foe) + "'s Dancer copied the dance!");
+        executeMove(opponentPokemon, playerPokemon, { ...chosenMove }, text, { copied: true });
+    }
+}
+
+// Does this move go at the opposing pokemon (as opposed to the user or the whole field)?
+function aimsAtFoe(move) {
+    return move.damage_class.name !== "status" || FOE_TARGETS.has(move.target && move.target.name);
 }
 
 // Jump Kick / High Jump Kick / Supercell Slam / Axe Kick: missing (or hitting something
@@ -314,10 +474,21 @@ const CHARGE_MESSAGES = {
 
 // First turn of a two-turn move: spend the turn charging (the move itself fires next turn,
 // when doTurn forces it again). Returns true if this turn was the charge turn.
-function tryStartCharge(attacker, move, text) {
+function tryStartCharge(attacker, move, text, field) {
     if (!CHARGE_MOVES.has(move.name)) return false;
     if (attacker.charging === move.name) {
         attacker.charging = null; // second turn: fall through and actually use it
+        return false;
+    }
+    // Solar Beam/Blade need no charge in sun, and Electro Shot none in rain
+    const weather = weatherOf(field);
+    const weatherSkip =
+        (weather === "sun" && (move.name === "solar-beam" || move.name === "solar-blade")) ||
+        (weather === "rain" && move.name === "electro-shot");
+    if (weatherSkip) {
+        if (CHARGE_TURN_BOOSTS[move.name]) {
+            addArrayToArray(text, doStatChanges(attacker, { stat_changes: CHARGE_TURN_BOOSTS[move.name] }));
+        }
         return false;
     }
     const powerHerb = attacker.item && attacker.item.name === POWER_HERB;
@@ -391,6 +562,11 @@ function canAct(attacker, text, move) {
             return false;
         }
     }
+    if (attacker.flinched) {
+        attacker.flinched = false;
+        text.push(pokemonNameToString(attacker) + " flinched and couldn't move!");
+        return false;
+    }
     if (attacker.confusion) {
         // Count down first, then check, so the last turn snaps out and acts normally
         // (same order as Showdown: a counter of 2 gives one confused attempt, not two).
@@ -415,10 +591,22 @@ function canAct(attacker, text, move) {
 // Reflect/Light Screen are side-wide, not per-pokemon, so their turn counters live
 // directly on the team array (attackingTeam) rather than on a pokemon object — the
 // team arrays are already threaded through doTurn/playerTurn everywhere.
-function trySetupScreen(attackingTeam, move, text) {
-    if (move.name !== "reflect" && move.name !== "light-screen") return false;
+function trySetupScreen(attackingTeam, move, text, field) {
+    if (move.name !== "reflect" && move.name !== "light-screen" && move.name !== "aurora-veil") return false;
     const holder = attackingTeam[0].item;
     const turns = holder && holder.name === LIGHT_CLAY ? 8 : 5; // Light Clay stretches a screen to 8 turns
+    if (move.name === "aurora-veil") {
+        // Aurora Veil (both categories at once) can only be raised in hail or snow
+        const weather = weatherOf(field);
+        text.push(pokemonNameToString(attackingTeam[0]) + " used " + moveNameToString(move) + "!");
+        if ((weather !== "hail" && weather !== "snow") || attackingTeam.auroraTurns > 0) {
+            text.push("But it failed!");
+            return true;
+        }
+        attackingTeam.auroraTurns = turns;
+        text.push("An Aurora Veil made " + pokemonNameToString(attackingTeam[0]) + "'s team stronger!");
+        return true;
+    }
     if (move.name === "reflect") attackingTeam.reflectTurns = turns;
     else attackingTeam.lightScreenTurns = turns;
     text.push(
@@ -588,10 +776,42 @@ const EXTRA_STAT_MOVES = new Set(["shell-smash"]);
 // Calm Mind), debuffs (Growl, Charm), and self-heals (Recover, Roost), driven by
 // stat_changes / meta.healing plus the move's target. A few need their own handling
 // because the data alone would be wrong (Belly Drum, Rest, Stuff Cheeks, HP-cost moves).
-function tryStatusMoveEffect(attacker, defender, move, text) {
+function tryStatusMoveEffect(attacker, defender, move, text, field) {
     const attackerName = pokemonNameToString(attacker);
     const category = move.meta && move.meta.category && move.meta.category.name;
     const target = move.target && move.target.name;
+
+    // Weather and terrain moves (Sunny Day, Electric Terrain, ...)
+    if (WEATHER_MOVES[move.name] || TERRAIN_MOVES[move.name]) {
+        const started = !field
+            ? false
+            : WEATHER_MOVES[move.name]
+            ? setWeather(field, WEATHER_MOVES[move.name], attacker, text)
+            : setTerrain(field, TERRAIN_MOVES[move.name], attacker, text);
+        if (!started) text.push("But it failed!");
+        return;
+    }
+
+    // Mean Look / Block / Spider Web: the target can't switch out while the user is around
+    if (TRAPPING_MOVES.has(move.name)) {
+        if (defender.types.some((t) => t.type.name === "ghost")) {
+            text.push("It doesn't affect " + pokemonNameToString(defender) + "!");
+        } else if (!applyTrap(attacker, defender, "trapped", move, text)) {
+            text.push("But it failed!");
+        }
+        return;
+    }
+
+    if (move.name === "focus-energy") {
+        // +2 to the user's critical-hit stage until it switches out
+        if (attacker.focusEnergy) {
+            text.push("But it failed!");
+        } else {
+            attacker.focusEnergy = true;
+            text.push(attackerName + " is getting pumped!");
+        }
+        return;
+    }
 
     if (move.name === "belly-drum") {
         // Pays half its max HP to max out Attack; fails if it can't afford it or is already maxed
@@ -608,7 +828,11 @@ function tryStatusMoveEffect(attacker, defender, move, text) {
 
     if (move.name === "rest") {
         // Fully heals and sleeps for two turns, curing any other status first
-        if (attacker.hp[0] >= attacker.hp[1] || (attacker.status && attacker.status.name === "sleep")) {
+        if (
+            attacker.hp[0] >= attacker.hp[1] ||
+            (attacker.status && attacker.status.name === "sleep") ||
+            terrainBlocksStatus(attacker, "sleep", field)
+        ) {
             text.push("But it failed!");
             return;
         }
@@ -636,8 +860,12 @@ function tryStatusMoveEffect(attacker, defender, move, text) {
         move.stat_changes &&
         move.stat_changes.length > 0
     ) {
-        const changes = move.stat_changes.filter((s) => STAT_NAMES.includes(s.stat.name));
+        let changes = move.stat_changes.filter((s) => STAT_NAMES.includes(s.stat.name));
         if (changes.length === 0) return;
+        // Growth is twice as strong in the sun
+        if (move.name === "growth" && weatherOf(field) === "sun") {
+            changes = changes.map((s) => ({ ...s, change: s.change * 2 }));
+        }
 
         let recipient = null;
         if (SELF_TARGETS.has(target)) recipient = attacker;
@@ -670,7 +898,9 @@ function tryStatusMoveEffect(attacker, defender, move, text) {
             text.push("But it failed!");
             return;
         }
-        const amount = Math.floor((attacker.hp[1] * move.meta.healing) / 100);
+        // Synthesis / Morning Sun / Moonlight / Shore Up heal more or less with the weather
+        const percent = weatherHealPercent(move, field) || move.meta.healing;
+        const amount = Math.floor((attacker.hp[1] * percent) / 100);
         const healed = Math.min(amount, attacker.hp[1] - attacker.hp[0]);
         attacker.hp[0] += healed;
         text.push(
@@ -679,10 +909,35 @@ function tryStatusMoveEffect(attacker, defender, move, text) {
     }
 }
 
+// Gives `pokemon` a major status directly (no move involved), respecting type immunities,
+// terrain, weather and its own ability. Used by ability effects like Gulp Missile.
+function inflictStatusDirect(pokemon, statusName, text, field) {
+    if (pokemon.status || pokemon.hp[0] <= 0) return false;
+    const types = pokemon.types.map((t) => t.type.name);
+    if ((STATUS_IMMUNE_TYPES[statusName] || []).some((t) => types.includes(t))) return false;
+    if (weatherBlocksStatus(statusName, field) || terrainBlocksStatus(pokemon, statusName, field)) return false;
+    if (abilityBlocksStatus(pokemon, statusName)) return false;
+    pokemon.status = statusName === "toxic" ? { name: "toxic", counter: 1 } : { name: statusName };
+    text.push(pokemonNameToString(pokemon) + " is now afflicted with " + statusName + "!");
+    tryConsumeStatusCureItem(pokemon, text);
+    return true;
+}
+
+// Traps `defender` so it can't switch out. kind "binding" (Wrap, Fire Spin...) lasts 4-5
+// turns and deals 1/8 max HP each turn; kind "trapped" (Mean Look, Block...) lasts until the
+// trapper leaves. Ghost types can't be trapped. Returns false if it didn't take hold.
+function applyTrap(attacker, defender, kind, move, text) {
+    if (defender.hp[0] <= 0 || defender.trap) return false;
+    if (defender.types.some((t) => t.type.name === "ghost")) return false;
+    defender.trap = { source: attacker, kind, move: move.name, turns: kind === "binding" ? 5 + Math.floor(Math.random() * 2) : null };
+    text.push(pokemonNameToString(defender) + (kind === "binding" ? " was trapped by " : " can no longer escape because of ") + moveNameToString(move) + "!");
+    return true;
+}
+
 // Status ailments / confusion (Thunder Wave, Toxic, Confuse Ray, and damage moves with a
 // secondary ailment chance like Nuzzle). Only one major status at a time; confusion is
 // tracked separately since it can stack with a major status.
-function tryInflictAilment(attacker, defender, move, text) {
+function tryInflictAilment(attacker, defender, move, text, field) {
     if (
         !move.meta ||
         !move.meta.ailment ||
@@ -692,6 +947,11 @@ function tryInflictAilment(attacker, defender, move, text) {
         return;
 
     let ailmentName = move.meta.ailment.name;
+    // Wrap, Fire Spin, Whirlpool...: PokeAPI calls this ailment "trap"
+    if (ailmentName === "trap") {
+        if (BINDING_MOVES.has(move.name)) applyTrap(attacker, defender, "binding", move, text);
+        return;
+    }
     // Pure status moves (category "ailment") always apply on hit; damaging moves roll
     // their secondary chance.
     const isGuaranteed = move.meta.category.name === "ailment";
@@ -710,6 +970,17 @@ function tryInflictAilment(attacker, defender, move, text) {
         (STATUS_IMMUNE_TYPES[ailmentName] || []).some((t) => defenderTypes.includes(t)) ||
         (POWDER_MOVES.has(move.name) && defenderTypes.includes("grass"));
     if (immune) {
+        if (isGuaranteed) text.push("It doesn't affect " + pokemonNameToString(defender) + "!");
+        return;
+    }
+    // Sun stops freezing; Misty Terrain stops every status (and Electric Terrain sleep) on
+    // grounded pokemon
+    if (weatherBlocksStatus(ailmentName, field) || terrainBlocksStatus(defender, ailmentName, field)) {
+        if (isGuaranteed) text.push("But it failed!");
+        return;
+    }
+    // The target's own ability can refuse the status (Comatose...)
+    if (abilityBlocksStatus(defender, ailmentName, attacker)) {
         if (isGuaranteed) text.push("It doesn't affect " + pokemonNameToString(defender) + "!");
         return;
     }
@@ -757,6 +1028,7 @@ function rollHitCount(move, attacker) {
 export function doAttack(attacker, defender, move, defenderTeam) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
+    const field = defenderTeam ? ensureField(defenderTeam, null) : null;
 
     // Non-damaging item-swap/removal moves (Trick, Switcheroo, Corrosive Gas, Bestow, Recycle)
     if (tryItemMove(attacker, defender, move, text)) return text;
@@ -776,8 +1048,8 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     // pipeline below (it would otherwise trigger things like Weakness Policy or resist
     // berries off a hit that never happened). Only its ailment, if it has one, applies.
     if (move.damage_class.name === "status") {
-        tryStatusMoveEffect(attacker, defender, move, text);
-        tryInflictAilment(attacker, defender, move, text);
+        tryStatusMoveEffect(attacker, defender, move, text, field);
+        tryInflictAilment(attacker, defender, move, text, field);
         // Moves that cost HP (Belly Drum) can put the user in range of its Sitrus Berry
         if (attacker.hp[0] > 0) tryConsumeHpTriggeredItem(attacker, text);
         return text;
@@ -792,18 +1064,21 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     let damage_number = 0;
     for (let hit = 0; hit < totalHits; hit++) {
         if (hit > 0 && (defender.hp[0] <= 0 || attacker.hp[0] <= 0)) break;
-        if (hit > 0 && ROLLS_ACCURACY_EACH_HIT.has(move.name) && !rollAccuracy(attacker, defender, move)) break;
+        if (hit > 0 && ROLLS_ACCURACY_EACH_HIT.has(move.name) && !rollAccuracy(attacker, defender, move, field)) break;
         const hitMove = ESCALATING_MULTIHIT.has(move.name) ? { ...move, power: move.power * (hit + 1) } : move;
         const ohko = isOhkoMove(move); // Fissure & co. deal exactly the target's remaining HP
-        let damage = ohko ? defender.hp[0] : damageCalc(attacker, defender, hitMove);
+        const isCrit = !ohko && rollCrit(attacker, defender, move);
+        let damage = ohko ? defender.hp[0] : damageCalc(attacker, defender, hitMove, { crit: isCrit, field });
         const typeEff = typeEffectiveness(move, defender);
 
-        // Reflect/Light Screen: halve incoming damage of the matching category for the
-        // defending side while their screen is still up.
-        if (defenderTeam && !ohko) {
-            if (move.damage_class.name === "physical" && defenderTeam.reflectTurns > 0)
-                damage = Math.floor(damage / 2);
-            else if (move.damage_class.name === "special" && defenderTeam.lightScreenTurns > 0)
+        // Reflect/Light Screen/Aurora Veil: halve incoming damage of the matching category for
+        // the defending side while the screen is still up (a critical hit goes right through).
+        if (defenderTeam && !ohko && !isCrit) {
+            if (
+                (move.damage_class.name === "physical" && defenderTeam.reflectTurns > 0) ||
+                (move.damage_class.name === "special" && defenderTeam.lightScreenTurns > 0) ||
+                defenderTeam.auroraTurns > 0
+            )
                 damage = Math.floor(damage / 2);
         }
 
@@ -840,17 +1115,32 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             sashSaved = true;
         }
 
+        if (isCrit) text.push("A critical hit!");
+        // Mimikyu's Disguise soaks up the first damaging hit (then it takes 1/8 max HP)
+        let disguiseBroke = false;
+        if (abilityName(defender) === "disguise" && !defender.disguiseBusted && !ignoresAbilities(attacker)) {
+            damage = 0;
+            defender.disguiseBusted = true;
+            disguiseBroke = true;
+        }
+        const hpBefore = defender.hp[0];
         damage_number = 0; // this hit's damage; totalDamage collects them across hits
         [defender.hp[0], damage_number] =
             defender.hp[0] - damage > 0
                 ? [defender.hp[0] - damage, damage]
                 : [0, defender.hp[0]];
-        text.push(
-            pokemonNameToString(defender) +
-                " lost " +
-                Math.round((damage_number / defender.hp[1]) * 1000) / 10 +
-                "% HP!"
-        );
+        if (disguiseBroke) {
+            text.push(pokemonNameToString(defender) + "'s disguise served it as a decoy!");
+            defender.hp[0] = Math.max(0, defender.hp[0] - Math.floor(defender.hp[1] / 8));
+            text.push(pokemonNameToString(defender) + "'s disguise busted!");
+        } else {
+            text.push(
+                pokemonNameToString(defender) +
+                    " lost " +
+                    Math.round((damage_number / defender.hp[1]) * 1000) / 10 +
+                    "% HP!"
+            );
+        }
         if (ohko && defender.hp[0] === 0) text.push("It's a one-hit KO!");
         if (sashSaved) {
             text.push(
@@ -919,6 +1209,22 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             defender.item = null;
         }
 
+        // The defender's ability reacting to being hit (Mummy, Wandering Spirit, Illusion...)
+        if (damage_number > 0) {
+            runHook(defender, "onDamagingHit", {
+                attacker,
+                move,
+                damage: damage_number,
+                text,
+                boost: (pokemon, changes, t) => addArrayToArray(t, doStatChanges(pokemon, { stat_changes: changes })),
+                inflictStatus: (pokemon, status, t) => inflictStatusDirect(pokemon, status, t, field),
+            }, attacker);
+            // ...and a hit that takes it to half HP or less can trigger Emergency Exit
+            if (defender.hp[0] > 0 && hpBefore > defender.hp[1] / 2 && defender.hp[0] <= defender.hp[1] / 2 && defenderTeam) {
+                runHook(defender, "onHpBelowHalf", { selfTeam: defenderTeam, text }, attacker);
+            }
+        }
+
         // Knock Off: knocks the defender's item away after the hit (unless it's unremovable)
         if (move.name === "knock-off" && isRemovable(defender.item) && damage_number > 0) {
             text.push(pokemonNameToString(defender) + " lost its " + itemLabel(defender) + "!");
@@ -980,7 +1286,29 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             text.push(pokemonNameToString(defender) + " thawed out!");
         }
 
-        tryInflictAilment(attacker, defender, move, text);
+        tryInflictAilment(attacker, defender, move, text, field);
+
+        // Secondary flinch (Air Slash, Bite, Fake Out...): only matters if the target hasn't
+        // moved yet this turn, since the flinch is wiped at the end of the turn. Covert Cloak
+        // blocks it.
+        const flinchChance = move.meta && move.meta.flinch_chance;
+        if (
+            flinchChance > 0 &&
+            damage_number > 0 &&
+            defender.hp[0] > 0 &&
+            !(defender.item && defender.item.name === COVERT_CLOAK) &&
+            Math.random() * 100 < flinchChance
+        ) {
+            defender.flinched = true;
+        }
+        // Anchor Shot / Spirit Shackle / Thousand Waves / Jaw Lock trap the target on hit
+        // (Jaw Lock traps the user too)
+        if (TRAPPING_MOVES.has(move.name) && damage_number > 0) {
+            if (applyTrap(attacker, defender, "trapped", move, text) && move.name === "jaw-lock") {
+                applyTrap(defender, attacker, "trapped", move, text);
+            }
+        }
+
         totalDamage += damage_number;
         hitsLanded += 1;
     }
@@ -1051,6 +1379,13 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         text.push(pokemonNameToString(attacker) + " blew up!");
     }
 
+    // Struggle: the user takes 1/4 of its own max HP no matter how much it dealt
+    if (move.name === "struggle" && damage_number > 0 && attacker.hp[0] > 0) {
+        attacker.hp[0] = Math.max(0, attacker.hp[0] - Math.max(1, Math.floor(attacker.hp[1] / 4)));
+        text.push(pokemonNameToString(attacker) + " was hurt by recoil!");
+        if (attacker.hp[0] === 0) text.push(pokemonNameToString(attacker) + " fainted!");
+    }
+
     // Life Orb: 1/10 max HP recoil on the attacker whenever it deals damage
     if (
         attacker.hp[0] > 0 &&
@@ -1082,12 +1417,18 @@ export function doSwitch(pokemon, index, options = {}) {
     let oldCurrent = pokemon[0];
     // Baton Pass hands stat stages and confusion to the replacement
     const passed = options.baton
-        ? { stat_levels: [...oldCurrent.stat_levels], confusion: oldCurrent.confusion }
+        ? { stat_levels: [...oldCurrent.stat_levels], confusion: oldCurrent.confusion, focusEnergy: oldCurrent.focusEnergy }
         : null;
+    resetAbilityState(oldCurrent); // undo Transform / borrowed abilities / Illusion
     resetStatChanges(oldCurrent); // Reset stat changes on switch out
     oldCurrent.lockedMove = null;
     oldCurrent.charging = null;
     oldCurrent.mustRecharge = false;
+    oldCurrent.flinched = false;
+    oldCurrent.trap = null;
+    oldCurrent.focusEnergy = false;
+    oldCurrent.actionsSinceSwitch = 0;
+    oldCurrent.activeTurns = 0;
     // Confusion is a volatile status: it doesn't survive a switch. (Major statuses do,
     // except that a badly-poisoned mon's toxic counter restarts.)
     oldCurrent.confusion = null;
@@ -1100,15 +1441,24 @@ export function doSwitch(pokemon, index, options = {}) {
     pokemon[0].lockedMove = null;
     pokemon[0].charging = null;
     pokemon[0].mustRecharge = false;
+    pokemon[0].flinched = false;
+    pokemon[0].trap = null;
+    pokemon[0].focusEnergy = false;
+    pokemon[0].actionsSinceSwitch = 0;
+    pokemon[0].activeTurns = 0;
     pokemon[0].confusion = null;
     if (pokemon[0].status && pokemon[0].status.name === "toxic") pokemon[0].status.counter = 1;
     resetStatChanges(pokemon[0]); // Reset stat changes on switch in
     if (passed) {
         pokemon[0].stat_levels = passed.stat_levels;
         pokemon[0].confusion = passed.confusion;
+        pokemon[0].focusEnergy = passed.focusEnergy;
     }
+    // Abilities that trigger on entering (Intimidate, Illusion, Imposter...); the on-entry
+    // text is tacked onto the switch line since callers expect a single string back
+    const entry = options.foeTeam ? runEntryAbilities(pokemon, options.foeTeam, ensureField(pokemon, options.foeTeam)) : [];
     text = text + "Switch in " + pokemonNameToString(pokemon[0]) + "!";
-    return text;
+    return entry.length > 0 ? text + " " + entry.join(" ") : text;
 }
 
 export function doMoveEffects(attacker, defender, move) {
@@ -1207,9 +1557,31 @@ export function resetStatChanges(pokemon) {
     pokemon.stat_levels = Array(STAT_NAMES.length).fill(0);
 }
 
-function doEndOfTurn(pokemon) {
+// `field` is the shared weather/terrain, `foe` the pokemon out on the other side (a trap
+// only holds while whoever trapped you is still there).
+function doEndOfTurn(pokemon, field, foe) {
     let text = [];
     if (pokemon.hp[0] <= 0) return text;
+
+    // Sandstorm / hail chip damage
+    const weatherDamage = weatherEndOfTurnDamage(pokemon, field);
+    if (weatherDamage > 0) {
+        pokemon.hp[0] = Math.max(0, pokemon.hp[0] - weatherDamage);
+        text.push(
+            pokemonNameToString(pokemon) +
+                (weatherOf(field) === "sand" ? " is buffeted by the sandstorm!" : " is buffeted by the hail!")
+        );
+        if (pokemon.hp[0] === 0) {
+            text.push(pokemonNameToString(pokemon) + " fainted!");
+            return text;
+        }
+    }
+    // Grassy Terrain heals grounded pokemon 1/16 of their max HP
+    if (terrainOf(field) === "grassy" && isGrounded(pokemon) && pokemon.hp[0] < pokemon.hp[1]) {
+        const healed = Math.min(Math.floor(pokemon.hp[1] / 16), pokemon.hp[1] - pokemon.hp[0]);
+        pokemon.hp[0] += healed;
+        text.push(pokemonNameToString(pokemon) + "'s HP was restored by the Grassy Terrain!");
+    }
 
     if (pokemon.status && pokemon.status.name === "burn") {
         pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 16));
@@ -1256,7 +1628,10 @@ function doEndOfTurn(pokemon) {
             // The orb afflicts its own holder at the end of the turn, unless the type is immune
             const status = pokemon.item.name === TOXIC_ORB ? "toxic" : "burn";
             const types = pokemon.types.map((t) => t.type.name);
-            if (!STATUS_IMMUNE_TYPES[status].some((t) => types.includes(t))) {
+            if (
+                !STATUS_IMMUNE_TYPES[status].some((t) => types.includes(t)) &&
+                !terrainBlocksStatus(pokemon, status, field)
+            ) {
                 pokemon.status = status === "toxic" ? { name: "toxic", counter: 1 } : { name: "burn" };
                 text.push(
                     pokemonNameToString(pokemon) +
@@ -1268,6 +1643,31 @@ function doEndOfTurn(pokemon) {
             }
         }
     }
+
+    // Abilities that act at the end of every turn (Cud Chew, Hunger Switch...)
+    if (pokemon.hp[0] > 0) {
+        runHook(pokemon, "onResidual", { field, text, applyBerry: applyBerryEffect });
+    }
+
+    // Being bound (Wrap, Fire Spin...) hurts every turn until it runs out; any trap ends
+    // quietly once whoever set it has left the field.
+    if (pokemon.hp[0] > 0 && pokemon.trap) {
+        const trap = pokemon.trap;
+        if (!foe || foe !== trap.source || foe.hp[0] <= 0) {
+            pokemon.trap = null;
+        } else if (trap.kind === "binding") {
+            trap.turns -= 1;
+            if (trap.turns <= 0) {
+                pokemon.trap = null;
+                text.push(pokemonNameToString(pokemon) + " was freed!");
+            } else {
+                pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
+                text.push(pokemonNameToString(pokemon) + " is hurt by being trapped!");
+                if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
+            }
+        }
+    }
+
     if (pokemon.hp[0] > 0) tryConsumeHpTriggeredItem(pokemon, text);
     return text;
 }

@@ -47,6 +47,12 @@ export const ITEM_POOL = [
     "power-herb",
     "loaded-dice",
     "wide-lens",
+    "scope-lens",
+    "heat-rock",
+    "damp-rock",
+    "smooth-rock",
+    "icy-rock",
+    "shed-shell",
     // Berries
     "colbur-berry",
     "shuca-berry",
@@ -80,7 +86,9 @@ export const ITEM_POOL = [
 // Items that are only worth handing out on a real Showdown set (where the moves that make
 // them useful come with them). A random pokemon with no Fly/Solar Beam/Fury Attack in its
 // kit would just hold a dud, so generateRandomItem never rolls these.
-export const REAL_SET_ONLY_ITEMS = new Set(["power-herb", "loaded-dice"]);
+export const REAL_SET_ONLY_ITEMS = new Set([
+    "power-herb", "loaded-dice", "heat-rock", "damp-rock", "smooth-rock", "icy-rock", "shed-shell",
+]);
 
 // item name -> move type it boosts 20% (or 30% for Muscle Band/physical, handled separately)
 export const TYPE_BOOST_ITEMS = {
@@ -158,6 +166,10 @@ export const LIGHT_CLAY = "light-clay";
 export const POWER_HERB = "power-herb";
 export const LOADED_DICE = "loaded-dice";
 export const WIDE_LENS = "wide-lens";
+export const SCOPE_LENS = "scope-lens";
+export const SHED_SHELL = "shed-shell"; // lets its holder switch out even when trapped
+// The rock that stretches each weather from 5 to 8 turns when its setter holds it
+export const WEATHER_ROCKS = { sun: "heat-rock", rain: "damp-rock", sand: "smooth-rock", hail: "icy-rock", snow: "icy-rock" };
 
 // berry -> which of the holder's conditions it cures ("confusion" is the volatile one; the
 // rest are the major status names in pokemon.status.name). Lum Berry cures all of them.
@@ -226,6 +238,11 @@ export const FLING_POWER = {
     "light-clay": 30,
     "loaded-dice": 30,
     "wide-lens": 10,
+    "heat-rock": 60,
+    "damp-rock": 60,
+    "smooth-rock": 10,
+    "icy-rock": 40,
+    "shed-shell": 10,
 };
 export function getFlingPower(itemName) {
     if (itemName.endsWith("-berry")) return 10;

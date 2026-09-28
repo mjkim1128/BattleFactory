@@ -12,6 +12,8 @@ import {
     getFlingPower,
 } from "./iteminfo";
 import { STATUS_TYPE_BLOCKED_MOVES } from "./movemechanics";
+import { weatherOf, weatherDamageMod, powerFieldMod } from "./field";
+import { abilityAttackMod } from "./abilities";
 
 export function typeEffectiveness(move, defender) {
     // Status moves aren't affected by the type chart (Trick vs Dark, Hypnosis vs Dark,
@@ -23,6 +25,7 @@ export function typeEffectiveness(move, defender) {
         !STATUS_TYPE_BLOCKED_MOVES.has(move.name)
     )
         return 1;
+    if (move.name === "struggle") return 1; // typeless: never resisted, never immune
     if (
         move.type.name === "ground" &&
         defender.item &&
@@ -38,8 +41,10 @@ export function typeEffectiveness(move, defender) {
     return TE;
 }
 
-export function damageCalc(attacker, defender, move) {
+// ctx.crit: this hit is a critical hit. ctx.field: the battle's weather/terrain, if any.
+export function damageCalc(attacker, defender, move, ctx = {}) {
     if (move.damage_class.name === "status") return 0; // status moves never deal damage
+    const { crit = false, field = null } = ctx;
     let type = typeEffectiveness(move, defender);
     let category = move.damage_class.name;
     let [attack, defense] =
@@ -53,6 +58,11 @@ export function damageCalc(attacker, defender, move) {
     if (move.name === "psyshock") [defense, defense_level] = [defender.base_stats[2], defender.stat_levels[1]]; // Psyshock
     if (move.name === "body-press") [attack, attack_level] = [attacker.base_stats[2], attacker.stat_levels[1]]; // Body-press
     if (move.name === "foul-play") [attack, attack_level] = [defender.base_stats[1], defender.stat_levels[0]]; // Foul-play
+    // A critical hit ignores the attacker's Attack drops and the defender's Defense boosts
+    if (crit) {
+        attack_level = Math.max(attack_level, 0);
+        defense_level = Math.min(defense_level, 0);
+    }
 
     // Choice Band/Specs: 1.5x the stat that matches this move's category
     const choiceStatIndex = attacker.item && CHOICE_ITEMS[attacker.item.name];
@@ -67,6 +77,14 @@ export function damageCalc(attacker, defender, move) {
 
     attack = statCalc(attack, attack_level);
     defense = statCalc(defense, defense_level);
+    attack = Math.floor(attack * abilityAttackMod(attacker, defender, move, category)); // e.g. Stakeout
+
+    // Sandstorm gives Rock types x1.5 Sp. Def, Snow gives Ice types x1.5 Def (the stat the
+    // move actually targets: Psyshock & co. hit the Defense stat even though they're special)
+    const targetsDefense = category === "physical" || move.name === "psyshock" || move.name === "psystrike" || move.name === "secret-sword";
+    const defenderTypes = defender.types.map((t) => t.type.name);
+    if (weatherOf(field) === "sand" && !targetsDefense && defenderTypes.includes("rock")) defense = Math.floor(defense * 1.5);
+    if (weatherOf(field) === "snow" && targetsDefense && defenderTypes.includes("ice")) defense = Math.floor(defense * 1.5);
 
     // Burn: halves the attack stat used by physical moves
     if (attacker.status && attacker.status.name === "burn" && category === "physical")
@@ -90,8 +108,12 @@ export function damageCalc(attacker, defender, move) {
             power *= 1 + 0.2 * Math.min((attacker.moveRepeatCount || 1) - 1, 5);
     }
 
+    power *= powerFieldMod(move, attacker, defender, field);
+
     let STAB = calculateSTAB(attacker, move) ? 1.5 : 1;
     let damage = (42 * power * (attack / defense)) / 50 + 2;
+    damage = Math.floor(damage * weatherDamageMod(move, field));
+    if (crit) damage = Math.floor(damage * 1.5);
     damage = Math.floor(damage * STAB * type);
     return damage;
 }

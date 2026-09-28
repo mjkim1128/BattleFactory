@@ -12,10 +12,10 @@ export const PIVOT_MOVES = new Set(MECHANICS.pivot);
 export const MULTIHIT_MOVES = MECHANICS.multihit;
 
 // The subsets the battle code actually handles. Sky Drop (carries the target away) is
-// left out and stays banned; Chilly Reception needs weather, Shed Tail needs Substitute
-// and Revival Blessing revives a fainted ally, so those three are not pivots here.
+// left out and stays banned; Shed Tail needs Substitute and Revival Blessing revives a
+// fainted ally, so those two are not pivots here (Chilly Reception sets snow, then switches).
 export const CHARGE_MOVES = new Set([...TWO_TURN_MOVES].filter((m) => m !== "sky-drop"));
-const UNSUPPORTED_PIVOTS = new Set(["chilly-reception", "shed-tail", "revival-blessing"]);
+const UNSUPPORTED_PIVOTS = new Set(["shed-tail", "revival-blessing"]);
 export const SUPPORTED_PIVOT_MOVES = new Set([...PIVOT_MOVES].filter((m) => !UNSUPPORTED_PIVOTS.has(m)));
 
 // While a pokemon is on the charge turn of one of these, moves aimed at it miss, except
@@ -49,6 +49,20 @@ export const CHARGE_TURN_BOOSTS = {
 export const ROLLS_ACCURACY_EACH_HIT = new Set(["population-bomb", "triple-axel", "triple-kick"]);
 // Multi-hit moves whose power grows with each hit (hit N uses N x base power).
 export const ESCALATING_MULTIHIT = new Set(["triple-axel", "triple-kick"]);
+
+// Status moves Magic Bounce sends back, and the moves Dancer copies (Showdown flags
+// reflectable / dance). Lunar Dance (faints the user) and Petal Dance (locks in) are left out.
+export const REFLECTABLE_MOVES = new Set(MECHANICS.reflectable);
+export const DANCE_MOVES = new Set(MECHANICS.dance.filter((m) => m !== "lunar-dance" && m !== "petal-dance"));
+
+// Moves that always land a critical hit (Showdown's willCrit).
+export const ALWAYS_CRIT_MOVES = new Set(["flower-trick", "frost-breath", "storm-throw", "surging-strikes", "wicked-blow"]);
+// Trapping: damaging moves that bind the target for a few turns (PokeAPI ailment "trap"),
+// and the ones that trap it until the user leaves (Showdown's volatile 'trapped').
+export const BINDING_MOVES = new Set(["bind", "clamp", "fire-spin", "infestation", "magma-storm", "sand-tomb", "snap-trap", "thunder-cage", "whirlpool", "wrap"]);
+export const TRAPPING_MOVES = new Set(["mean-look", "block", "spider-web", "anchor-shot", "spirit-shackle", "thousand-waves", "jaw-lock"]);
+// Only usable on the first turn after switching in (Showdown: activeMoveActions > 1 fails).
+export const FIRST_TURN_ONLY_MOVES = new Set(["fake-out", "first-impression"]);
 
 // One-hit KO moves and the type that is immune to them (from Showdown's `ohko` flag).
 export const OHKO_MOVES = { fissure: null, guillotine: null, "horn-drill": null, "sheer-cold": "ice" };

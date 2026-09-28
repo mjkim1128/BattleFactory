@@ -9,6 +9,7 @@ export const wait = (ms) =>
 // but types, damage classes, and stat names are small fixed sets we display from a
 // local table instead of paying an extra request for each one.
 const TYPE_KO = {
+    typeless: "무속성", // Struggle
     normal: "노말",
     fire: "불꽃",
     water: "물",
@@ -69,7 +70,8 @@ export function pokemonTypeToString(pokemon) {
 }
 
 export function pokemonNameToString(pokemon) {
-    return pokemon.korean_name || capitalizeFirstLetter(pokemon.name);
+    const shown = pokemon.illusion || pokemon; // a pokemon under Illusion goes by its disguise's name
+    return shown.korean_name || capitalizeFirstLetter(shown.name);
 }
 
 export function moveNameToString(move) {

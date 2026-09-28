@@ -11,6 +11,11 @@ import {
     doSwitch,
     doTurn,
     resumeTurn,
+    isTrapped,
+    getUsableMoves,
+    STRUGGLE,
+    WEATHER_LABEL,
+    TERRAIN_LABEL,
     switchPokemon,
     lodash,
     arraysEqual,
@@ -164,7 +169,10 @@ export function Battle(props) {
             return;
         }
         setForceSwitch(false);
-        let text = doSwitch(pokemonArr, switch_index);
+        /// (the other side is needed for on-entry abilities like Intimidate)
+        let text = doSwitch(pokemonArr, switch_index, {
+            foeTeam: pokemonArr === props.playerPokemon ? props.opponentPokemon : props.playerPokemon,
+        });
         updateTurnText(text);
         if (playerType === "player") {
             setAnnouncerMessage([text]);
@@ -182,6 +190,10 @@ export function Battle(props) {
         if (isForceSwitch) {
             forcedSwitch(props.playerPokemon, index, "player");
         } else if (!isForceSwitch) {
+            if (isTrapped(props.playerPokemon, props.opponentPokemon)) {
+                alert("Trapped! You can't switch out right now.");
+                return;
+            }
             let move = { priority: 6, index: index };
             nextTurn(move);
         }
@@ -202,6 +214,16 @@ export function Battle(props) {
         setHistory(history);
     }
 
+    /// Weather / terrain currently in play, e.g. "비 (3턴) · 그래스필드 (5턴)"
+    const field = props.playerPokemon.field;
+    const fieldText = field
+        ? [
+              field.weather && `${WEATHER_LABEL[field.weather.name]} (${field.weather.turns}턴)`,
+              field.terrain && `${TERRAIN_LABEL[field.terrain.name]} (${field.terrain.turns}턴)`,
+          ]
+              .filter(Boolean)
+              .join(" · ")
+        : "";
     let isCurrent = !(stepNumber < history.length);
     let displaypokes = isCurrent
         ? props.playerPokemon
@@ -215,6 +237,9 @@ export function Battle(props) {
     let playableMoves = forcedMoveName
         ? currentpoke.moveset.filter((move) => move.name === forcedMoveName)
         : currentpoke.moveset;
+    /// Out of PP on every move (or on the one it is locked into): Struggle is all that's left
+    const usableMoves = getUsableMoves(currentpoke);
+    if (usableMoves.length === 1 && usableMoves[0] === STRUGGLE) playableMoves = [STRUGGLE];
     if (playableMoves.length === 0) playableMoves = currentpoke.moveset;
     let moves = playableMoves.map((move, index) => {
         return (
@@ -278,6 +303,7 @@ export function Battle(props) {
                             <h2>
                                 Turn {isCurrent ? turns.length : stepNumber}
                             </h2>
+                            {fieldText && <p className="field-info">{fieldText}</p>}
                         </div>
                     )}
                 </div>
@@ -296,10 +322,12 @@ export function Battle(props) {
                                 : history[stepNumber].opponentPokemon[0]
                         }
                         img={
-                            isCurrent
-                                ? props.opponentPokemon[0].sprites.front_default
-                                : history[stepNumber].opponentPokemon[0].sprites
-                                      .front_default
+                            /// a pokemon under Illusion shows its disguise's sprite
+                            (isCurrent
+                                ? props.opponentPokemon[0].illusion || props.opponentPokemon[0]
+                                : history[stepNumber].opponentPokemon[0].illusion ||
+                                  history[stepNumber].opponentPokemon[0]
+                            ).sprites.front_default
                         }
                     />
                 </div>

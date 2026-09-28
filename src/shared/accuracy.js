@@ -1,5 +1,6 @@
 import { OHKO_MOVES, IGNORE_EVASION_MOVES } from "./movemechanics";
 import { WIDE_LENS } from "./iteminfo";
+import { weatherAccuracy } from "./field";
 
 // Accuracy, following Pokemon Showdown's hitStepAccuracy (sim/battle-actions.ts): the
 // move's base accuracy, Wide Lens, then the accuracy/evasion stat stages, rolled against
@@ -35,8 +36,12 @@ function clamp(n, lo, hi) {
 
 // The percent chance for `move` to hit, or null if it can't miss (Swift, Aerial Ace, moves
 // that only affect the user, Toxic from a Poison type...). Can be above 100.
-export function hitChance(attacker, defender, move) {
-    const base = move.accuracy;
+export function hitChance(attacker, defender, move, field = null) {
+    let base = move.accuracy;
+    // Thunder/Hurricane/Blizzard & co. change with the weather (never miss / only 50%)
+    const weatherOverride = weatherAccuracy(move, field);
+    if (weatherOverride === "always") return null;
+    if (weatherOverride !== undefined) base = weatherOverride;
     if (base === null || base === undefined || base === true) return null;
     if (!isRolled(move)) return null;
     if (move.name === "toxic" && attacker.types.some((t) => t.type.name === "poison")) return null;
@@ -62,7 +67,7 @@ export function hitChance(attacker, defender, move) {
 }
 
 // Rolls the accuracy check: true if the move connects.
-export function rollAccuracy(attacker, defender, move) {
-    const chance = hitChance(attacker, defender, move);
+export function rollAccuracy(attacker, defender, move, field = null) {
+    const chance = hitChance(attacker, defender, move, field);
     return chance === null || Math.floor(Math.random() * 100) < chance;
 }

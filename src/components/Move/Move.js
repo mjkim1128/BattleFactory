@@ -5,6 +5,8 @@ import {
     moveNameToString,
     pokemonNameToString,
     typeNameToString,
+    ppLeft,
+    maxPP,
 } from "shared";
 import "./Move.css";
 
@@ -89,6 +91,11 @@ export function Move(props) {
                 <button
                     className={moveClassName}
                     id={props.move.type.name}
+                    disabled={
+                        props.moveOwner !== "party" &&
+                        props.move.name !== "struggle" &&
+                        ppLeft(props.move) <= 0
+                    }
                     onClick={() => props.onClick(props.move)}
                     onMouseOver={(e) => {
                         setStyle({ display: "table" });
@@ -99,6 +106,11 @@ export function Move(props) {
                 >
                     <p>{moveNameToString(props.move)}</p>
                     <p>{typeNameToString(props.move.type.name)}</p>
+                    {props.move.name !== "struggle" && (
+                        <p>
+                            PP {ppLeft(props.move)}/{maxPP(props.move)}
+                        </p>
+                    )}
                 </button>
             </div>
             <div style={style}>

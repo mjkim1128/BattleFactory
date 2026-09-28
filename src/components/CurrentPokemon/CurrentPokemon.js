@@ -11,7 +11,7 @@ export function CurrentPokemon(props) {
         <div className="current-pokemon-div">
             <div>
                 <p>{pokemonNameToString(props.pokemon)}</p>
-                <p>{pokemonTypeToString(props.pokemon)}</p>
+                <p>{pokemonTypeToString(props.pokemon.illusion || props.pokemon)}</p>
             </div>
             <div>
                 <HealthBar

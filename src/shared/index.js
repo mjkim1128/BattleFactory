@@ -12,3 +12,6 @@ export * from './randompokemon';
 export * from './computerpokemon';
 export * from './processjson';
 export * from './bosspokemon';
+export * from './pp';
+export * from './field';
+export * from './abilities';
