@@ -70,6 +70,7 @@ export function terrainOf(field) {
 // Balloon, and (Iron Ball aside) not levitating. `levitates` is a hook for abilities.
 export function isGrounded(pokemon) {
     if (activeItem(pokemon) && pokemon.item.name === "iron-ball") return true;
+    if (pokemon.magnetRise) return false;
     if (pokemon.types.some((t) => t.type.name === "flying")) return false;
     if (activeItem(pokemon) && pokemon.item.name === "air-balloon") return false;
     if (pokemon.levitates) return false;

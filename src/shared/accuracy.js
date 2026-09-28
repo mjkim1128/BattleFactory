@@ -69,10 +69,11 @@ export function hitChance(attacker, defender, move, field = null) {
     const accuracyStage = ignoresBoosts(defender, attacker)
         ? 0
         : clamp((attacker.stat_levels && attacker.stat_levels[5]) || 0, -6, 6);
-    const evasionStage =
+    let evasionStage =
         IGNORE_EVASION_MOVES.has(move.name) || ignoresBoosts(attacker) || ignoresEvasion(attacker)
             ? 0
             : (defender.stat_levels && defender.stat_levels[6]) || 0;
+    if (defender.foresight && evasionStage > 0) evasionStage = 0; // Foresight sees through evasion boosts
     const boost = clamp(accuracyStage - evasionStage, -6, 6);
     if (boost > 0) accuracy = Math.floor((accuracy * (3 + boost)) / 3);
     else if (boost < 0) accuracy = Math.floor((accuracy * 3) / (3 - boost));

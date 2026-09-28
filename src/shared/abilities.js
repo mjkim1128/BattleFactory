@@ -997,7 +997,7 @@ export const ABILITIES = {
         },
     },
     "sticky-hold": { breakable: true, stickyHold: true },
-    oblivious: {}, // (only its Intimidate immunity, see INTIMIDATE_IMMUNE)
+    oblivious: { breakable: true, preventsTaunt: true }, // (and immune to Intimidate, see INTIMIDATE_IMMUNE)
     "long-reach": {}, // (its moves don't make contact, see makesContact)
     damp: { breakable: true },
 
@@ -1294,6 +1294,8 @@ export const ABILITIES = {
     "mycelium-might": { slowStatusMoves: true },
     // Roar, Whirlwind, Dragon Tail and Circle Throw can't drag it out
     "suction-cups": { breakable: true, preventsDrag: true },
+    // Its contact moves ignore Protect and its relatives (see isBlockedByProtection in turn.js)
+    "unseen-fist": { unseenFist: true },
     // Copies the stat boosts the other side gets (turn.js compares stages around every action)
     opportunist: { copiesFoeBoosts: true },
     // Its item has no effect (see activeItem in helditem.js). It can still be handed one by Trick
@@ -1460,6 +1462,8 @@ export const canPoisonAnything = (pokemon) => flag(pokemon, "poisonsAnything"); 
 export const hasEarlyBird = (pokemon) => flag(pokemon, "earlyBird");
 export const preventsDisable = (pokemon, attacker = null) => flag(pokemon, "preventsDisable", attacker); // Aroma Veil
 export const hasSlowStatusMoves = (pokemon) => flag(pokemon, "slowStatusMoves"); // Mycelium Might
+export const hasUnseenFist = (pokemon) => flag(pokemon, "unseenFist");
+export const preventsTaunt = (pokemon, attacker = null) => flag(pokemon, "preventsTaunt", attacker); // Oblivious
 export const preventsDrag = (pokemon, attacker = null) => flag(pokemon, "preventsDrag", attacker); // Suction Cups, Guard Dog
 export const copiesFoeBoosts = (pokemon) => flag(pokemon, "copiesFoeBoosts"); // Opportunist
 export const halvesBurnDamage = (pokemon) => flag(pokemon, "halvesBurn");
@@ -1595,6 +1599,25 @@ export function resetAbilityState(pokemon) {
     pokemon.proteanUsed = false;
     pokemon.boosterStat = null; // Protosynthesis / Quark Drive
     pokemon.perish = null;
+    pokemon.yawn = null;
+    pokemon.cursed = false;
+    pokemon.destinyBond = false;
+    pokemon.magnetRise = null;
+    pokemon.foresight = false;
+    pokemon.healBlock = null;
+    pokemon.magicCoat = false;
+    pokemon.snatching = false;
+    pokemon.tailwindActive = false;
+    pokemon.taunt = null;
+    pokemon.encore = null;
+    pokemon.lastMove = null;
+    pokemon.substitute = null;
+    pokemon.leechSeed = false;
+    pokemon.lastPhysicalDamage = pokemon.lastSpecialDamage = pokemon.lastDamageTaken = 0;
+    pokemon.protection = null; // Protect & co., Endure and the stall counter end when it leaves
+    pokemon.enduring = false;
+    pokemon.stallDivisor = 1;
+    pokemon.stalledThisTurn = false;
     pokemon.itemUsedThisTurn = false;
     pokemon.ignoresAbilityNow = false;
     if (!pokemon.formPersistent) revertForme(pokemon); // Zen Mode, Blade Forme, School... (Hero and Noice stay)

@@ -100,6 +100,13 @@ export function Move(props) {
                                 props.attackerDefender &&
                                 props.attackerDefender[0].disabled &&
                                 props.attackerDefender[0].disabled.move === props.move.name
+                            ) ||
+                            /// Taunt shuts off every status move
+                            !!(
+                                props.attackerDefender &&
+                                props.attackerDefender[0].taunt &&
+                                props.move.damage_class &&
+                                props.move.damage_class.name === "status"
                             ))
                     }
                     onClick={() => props.onClick(props.move)}

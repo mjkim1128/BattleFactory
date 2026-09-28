@@ -67,8 +67,36 @@ export const SLICING_MOVES = new Set(MECHANICS.slicing);
 export const SOUND_MOVES = new Set(MECHANICS.sound);
 export const BULLET_MOVES = new Set(MECHANICS.bullet);
 export const WIND_MOVES = new Set(MECHANICS.wind);
+// Protect and its relatives. `kind` says what they stop ("all" moves that Protect stops, or
+// only "damaging" ones); `contact` is what happens to an attacker that touches the shield
+// (Showdown's data/moves.ts conditions).
+export const PROTECT_MOVES = {
+    protect: { kind: "all" },
+    detect: { kind: "all" },
+    "spiky-shield": { kind: "all", contact: { damage: 1 / 8 } },
+    "baneful-bunker": { kind: "all", contact: { status: "poison" } },
+    "burning-bulwark": { kind: "all", contact: { status: "burn" } },
+    "kings-shield": { kind: "damaging", contact: { drop: [["attack", -1]] } },
+    obstruct: { kind: "damaging", contact: { drop: [["defense", -2]] } },
+    "silk-trap": { kind: "damaging", contact: { drop: [["speed", -1]] } },
+};
+// Moves that go on the "stall" counter: each use in a row is a third as likely to work
+export const STALL_MOVES = new Set([...Object.keys(PROTECT_MOVES), "endure"]);
+// The moves a protecting move can stop (Showdown's `protect` flag: Feint, Shadow Force,
+// Phantom Force, Roar and the like go through)
+export const PROTECT_BLOCKED = new Set(MECHANICS.protect);
 // Roar / Whirlwind / Dragon Tail / Circle Throw drag the target out, a random pokemon coming in
 export const FORCE_SWITCH_MOVES = new Set(["roar", "whirlwind", "dragon-tail", "circle-throw"]);
+// Moves that pass through a Substitute (Showdown's `bypasssub`), Sleep Talk can't call
+// (`nosleeptalk`) and Encore can't lock into (`failencore`)
+export const SUBSTITUTE_BYPASS = new Set(MECHANICS.bypasssub);
+export const NO_SLEEP_TALK = new Set(MECHANICS.nosleeptalk);
+export const FAIL_ENCORE = new Set(MECHANICS.failencore);
+// Snatch can steal these; Copycat / Me First can't copy some; Heal Block forbids the healing ones
+export const SNATCHABLE_MOVES = new Set(MECHANICS.snatch);
+export const FAIL_COPYCAT = new Set(MECHANICS.failcopycat);
+export const FAIL_ME_FIRST = new Set(MECHANICS.failmefirst);
+export const HEAL_MOVES = new Set(MECHANICS.heal);
 // Damp stops these
 export const EXPLOSIVE_MOVES = new Set(["explosion", "self-destruct", "mind-blown", "misty-explosion"]);
 

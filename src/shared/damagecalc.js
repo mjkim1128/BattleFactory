@@ -1,4 +1,5 @@
 import { PogeyData } from "./pogey";
+import { effectiveSpeed } from "./speed";
 import { activeItem } from "./helditem";
 import {
     TYPE_BOOST_ITEMS,
@@ -30,6 +31,61 @@ import {
     ignoresGhostImmunity,
 } from "./abilities";
 
+// Moves that deal a fixed amount of damage: no crit, no screens, no stats, no type
+// effectiveness (an immunity still stops them). Level 100 pokemon only.
+const FIXED_DAMAGE_MOVES = new Set([
+    "final-gambit", "seismic-toss", "night-shade", "psywave", "super-fang", "natures-madness", "endeavor",
+    "counter", "mirror-coat", "metal-burst",
+]);
+export const isFixedDamageMove = (move) => FIXED_DAMAGE_MOVES.has(move.name);
+function fixedDamage(move, attacker, defender) {
+    switch (move.name) {
+        case "final-gambit": // everything the user has left
+            return attacker.hp[0];
+        case "seismic-toss":
+        case "night-shade":
+            return 100; // the user's level
+        case "psywave":
+            return Math.floor((100 * (50 + Math.floor(Math.random() * 101))) / 100);
+        case "super-fang":
+        case "natures-madness":
+            return Math.max(1, Math.floor(defender.hp[0] / 2));
+        case "endeavor": // brings the target down to the user's HP
+            return Math.max(0, defender.hp[0] - attacker.hp[0]);
+        case "counter":
+            return 2 * (attacker.lastPhysicalDamage || 0);
+        case "mirror-coat":
+            return 2 * (attacker.lastSpecialDamage || 0);
+        case "metal-burst":
+            return Math.max(1, Math.floor(1.5 * (attacker.lastDamageTaken || 0)));
+        default:
+            return null;
+    }
+}
+
+// Base power for the moves whose power isn't a fixed number. Friendship-based moves are worked
+// out at maximum friendship (Return 102, Frustration 1).
+export function dynamicPower(move, attacker, defender, field) {
+    switch (move.name) {
+        case "return":
+            return 102;
+        case "frustration":
+            return 1;
+        case "gyro-ball": {
+            const mine = effectiveSpeed(attacker, field);
+            const power = mine > 0 ? Math.floor((25 * effectiveSpeed(defender, field)) / mine) + 1 : 1;
+            return Math.min(150, power);
+        }
+        case "reversal":
+        case "flail": {
+            const ratio = Math.max(Math.floor((attacker.hp[0] * 48) / attacker.hp[1]), 1);
+            return ratio < 2 ? 200 : ratio < 5 ? 150 : ratio < 10 ? 100 : ratio < 17 ? 80 : ratio < 33 ? 40 : 20;
+        }
+        default:
+            return null;
+    }
+}
+
 // Grass Knot / Low Kick hit harder the heavier the target is; Heavy Slam / Heat Crash the
 // heavier the user is compared with it (weights in hectograms, as PokeAPI has them).
 // Returns null for every other move.
@@ -60,6 +116,8 @@ export function typeEffectiveness(move, defender, attacker = null) {
     if (move.name === "struggle") return 1; // typeless: never resisted, never immune
     // Levitate: Ground moves don't touch it (unless the attacker has Mold Breaker)
     if (move.type.name === "ground" && isGroundImmune(defender, attacker)) return 0;
+    // Magnet Rise: floating on magnetism
+    if (move.type.name === "ground" && defender.magnetRise && !(activeItem(defender) && defender.item.name === "iron-ball")) return 0;
     if (
         move.type.name === "ground" &&
         activeItem(defender) &&
@@ -68,7 +126,10 @@ export function typeEffectiveness(move, defender, attacker = null) {
         return 0; // Air Balloon grounds immunity, popped separately once the holder is hit by anything else
     let TE = PogeyData.getMoveResult(move, defender);
     // Scrappy: Normal/Fighting moves can hit Ghost types after all
-    if (TE === 0 && attacker && ignoresGhostImmunity(attacker, move) && defender.types.some((t) => t.type.name === "ghost")) {
+    // Scrappy, and a target that has been identified with Foresight, can be hit by Normal and
+    // Fighting moves even if it is a Ghost
+    const foreseen = defender.foresight && (move.type.name === "normal" || move.type.name === "fighting");
+    if (TE === 0 && ((attacker && ignoresGhostImmunity(attacker, move)) || foreseen) && defender.types.some((t) => t.type.name === "ghost")) {
         const rest = defender.types.filter((t) => t.type.name !== "ghost");
         TE = rest.length > 0 ? PogeyData.getMoveResult(move, { ...defender, types: rest }) : 1;
     }
@@ -88,9 +149,10 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     const { crit = false, field = null } = ctx;
     let type = typeEffectiveness(move, defender, attacker);
     if (absorbsMove(defender, attacker, move)) return 0; // Water Absorb & co. take it instead
-    // Final Gambit deals exactly the user's remaining HP, whatever the stats and type chart say
-    // (a type immunity still stops it)
-    if (move.name === "final-gambit") return type === 0 ? 0 : attacker.hp[0];
+    // Fixed-damage moves (Seismic Toss, Super Fang, Final Gambit, Counter...): a type immunity
+    // still stops them, nothing else matters
+    const fixed = fixedDamage(move, attacker, defender);
+    if (fixed !== null) return type === 0 ? 0 : fixed;
     let category = move.damage_class.name;
     let [attack, defense] =
         category === "physical"
@@ -142,6 +204,8 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     let power = move.priority < 0 ? move.power * 2 : move.power; // Double power of negative priority moves
     const weighted = weightPower(move, attacker, defender);
     if (weighted !== null) power = weighted;
+    const dynamic = dynamicPower(move, attacker, defender, field);
+    if (dynamic !== null) power = dynamic;
 
     // Fling: power comes from whatever the attacker is holding, not the move's own base power
     if (move.name === "fling" && attacker.item) power = getFlingPower(attacker.item.name);

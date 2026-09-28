@@ -1,3 +1,4 @@
+import { HEAL_MOVES } from "./movemechanics";
 // Move PP. Every move gets its base PP x 8/5 (the max with three PP Ups, what competitive
 // sets use), tracked per pokemon on the move object as ppLeft. A move object that has
 // never been used has no ppLeft yet, which just means "full".
@@ -68,7 +69,18 @@ export function getUsableMoves(pokemon) {
         const locked = moves.filter((m) => m.name === pokemon.lockedMove);
         if (locked.length > 0) moves = locked;
     }
-    // Disable (Cursed Body...) shuts one move off for a few turns
-    const usable = moves.filter((m) => hasPP(m) && !(pokemon.disabled && pokemon.disabled.move === m.name));
+    // Encore locks it into the move it used last
+    if (pokemon.encore) {
+        const encored = moves.filter((m) => m.name === pokemon.encore.move && hasPP(m));
+        if (encored.length > 0) moves = encored;
+    }
+    // Disable (Cursed Body...) shuts one move off for a few turns, Taunt every status move
+    const usable = moves.filter(
+        (m) =>
+            hasPP(m) &&
+            !(pokemon.disabled && pokemon.disabled.move === m.name) &&
+            !(pokemon.taunt && m.damage_class && m.damage_class.name === "status")&&
+            !(pokemon.healBlock && HEAL_MOVES.has(m.name))
+    );
     return usable.length > 0 ? usable : [STRUGGLE];
 }

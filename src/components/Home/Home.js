@@ -89,6 +89,9 @@ export function Home() {
             arr.healingWish = null; /// an unused Healing Wish / Lunar Dance is gone
             arr.wish = null;
             arr.dragRequest = false;
+            arr.safeguardTurns = 0;
+            arr.tailwindTurns = 0;
+            arr.queuedMove = null;
         }
         setPlayerPokemon(temp);
         setOpponentPokemon(dumb);

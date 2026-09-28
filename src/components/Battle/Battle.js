@@ -248,6 +248,11 @@ export function Battle(props) {
     const fieldText = [
         field && field.weather && `${WEATHER_LABEL[field.weather.name]} (${field.weather.turns}턴)`,
         field && field.terrain && `${TERRAIN_LABEL[field.terrain.name]} (${field.terrain.turns}턴)`,
+        field && field.trickRoom && `트릭룸 (${field.trickRoom.turns}턴)`,
+        props.playerPokemon.tailwindTurns > 0 && `내 쪽 순풍 (${props.playerPokemon.tailwindTurns}턴)`,
+        props.opponentPokemon.tailwindTurns > 0 && `상대 쪽 순풍 (${props.opponentPokemon.tailwindTurns}턴)`,
+        props.playerPokemon.safeguardTurns > 0 && `내 쪽 신비의부적 (${props.playerPokemon.safeguardTurns}턴)`,
+        props.opponentPokemon.safeguardTurns > 0 && `상대 쪽 신비의부적 (${props.opponentPokemon.safeguardTurns}턴)`,
         myHazards && `내 쪽 함정: ${myHazards}`,
         theirHazards && `상대 쪽 함정: ${theirHazards}`,
     ]
@@ -262,12 +267,15 @@ export function Battle(props) {
         : history[stepNumber].playerPokemon[0];
     /// A pokemon mid-way through a two-turn move (Fly, Solar Beam, ...) must finish it;
     /// a Choice item locks it to the move it already used.
-    const forcedMoveName = currentpoke.charging || currentpoke.lockedMove;
+    /// Encore locks it into its last move while that move has PP left.
+    const usableMoves = getUsableMoves(currentpoke);
+    const encoredMove = currentpoke.encore && usableMoves.find((move) => move.name === currentpoke.encore.move);
+    const forcedMoveName =
+        currentpoke.charging || currentpoke.lockedMove || (encoredMove && usableMoves.length === 1 ? encoredMove.name : null);
     let playableMoves = forcedMoveName
         ? currentpoke.moveset.filter((move) => move.name === forcedMoveName)
         : currentpoke.moveset;
     /// Out of PP on every move (or on the one it is locked into): Struggle is all that's left
-    const usableMoves = getUsableMoves(currentpoke);
     if (usableMoves.length === 1 && usableMoves[0] === STRUGGLE) playableMoves = [STRUGGLE];
     if (playableMoves.length === 0) playableMoves = currentpoke.moveset;
     let moves = playableMoves.map((move, index) => {
