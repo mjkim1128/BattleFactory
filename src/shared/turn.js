@@ -7,6 +7,13 @@ import {
 } from "./helpers";
 import { CONTACT_MOVES } from "./legalmoves";
 import {
+    DEFROST_MOVES,
+    THAWS_TARGET_MOVES,
+    TOXIC_MOVES,
+    POWDER_MOVES,
+    STATUS_IMMUNE_TYPES,
+} from "./movemechanics";
+import {
     RESIST_BERRIES,
     STAT_BOOST_BERRIES,
     HP_HEAL_BERRIES,
@@ -133,7 +140,7 @@ export function playerTurn(playerPokemon, opponentPokemon, move) {
     }
     /// Move is attack
     const attacker = playerPokemon[0];
-    if (!canAct(attacker, text)) return text;
+    if (!canAct(attacker, text, move)) return text;
 
     if (trySetupScreen(playerPokemon, move, text)) return text;
 
@@ -168,7 +175,7 @@ function confusionSelfDamage(pokemon) {
 
 // Sleep/freeze/confusion/paralysis can each stop a pokemon from acting this turn.
 // Returns false (having pushed the reason into `text`) if it can't move.
-function canAct(attacker, text) {
+function canAct(attacker, text, move) {
     if (attacker.status && attacker.status.name === "sleep") {
         if (attacker.status.counter <= 0) {
             attacker.status = null;
@@ -180,7 +187,11 @@ function canAct(attacker, text) {
         }
     }
     if (attacker.status && attacker.status.name === "freeze") {
-        if (Math.random() < 0.2) {
+        if (move && DEFROST_MOVES.has(move.name)) {
+            // Using a defrost move (Flare Blitz, Scald, ...) thaws the user with no roll
+            attacker.status = null;
+            text.push(pokemonNameToString(attacker) + " thawed out using " + moveNameToString(move) + "!");
+        } else if (Math.random() < 0.2) {
             attacker.status = null;
             text.push(pokemonNameToString(attacker) + " thawed out!");
         } else {
@@ -189,17 +200,17 @@ function canAct(attacker, text) {
         }
     }
     if (attacker.confusion) {
+        // Count down first, then check, so the last turn snaps out and acts normally
+        // (same order as Showdown: a counter of 2 gives one confused attempt, not two).
+        attacker.confusion.counter -= 1;
         if (attacker.confusion.counter <= 0) {
             attacker.confusion = null;
             text.push(pokemonNameToString(attacker) + " snapped out of confusion!");
-        } else {
-            attacker.confusion.counter -= 1;
-            if (Math.random() < 1 / 3) {
-                attacker.hp[0] = Math.max(0, attacker.hp[0] - confusionSelfDamage(attacker));
-                text.push(pokemonNameToString(attacker) + " is confused! It hurt itself in its confusion!");
-                if (attacker.hp[0] === 0) text.push(pokemonNameToString(attacker) + " fainted!");
-                return false;
-            }
+        } else if (Math.random() < 1 / 3) {
+            attacker.hp[0] = Math.max(0, attacker.hp[0] - confusionSelfDamage(attacker));
+            text.push(pokemonNameToString(attacker) + " is confused! It hurt itself in its confusion!");
+            if (attacker.hp[0] === 0) text.push(pokemonNameToString(attacker) + " fainted!");
+            return false;
         }
     }
     if (attacker.status && attacker.status.name === "paralysis" && Math.random() < 0.25) {
@@ -250,6 +261,7 @@ export function turnText(attacker, defender, move) {
         );
     }
     if (
+        move.damage_class.name !== "status" && // a status move deals no damage, so no effectiveness text
         typeEffectiveness(move, defender) > 0 &&
         typeEffectiveness(move, defender) !== 1
     ) {
@@ -372,6 +384,66 @@ function tryItemMove(attacker, defender, move, text) {
     return false;
 }
 
+// Status ailments / confusion (Thunder Wave, Toxic, Confuse Ray, and damage moves with a
+// secondary ailment chance like Nuzzle). Only one major status at a time; confusion is
+// tracked separately since it can stack with a major status.
+function tryInflictAilment(attacker, defender, move, text) {
+    if (
+        !move.meta ||
+        !move.meta.ailment ||
+        move.meta.ailment.name === "none" ||
+        defender.hp[0] <= 0
+    )
+        return;
+
+    let ailmentName = move.meta.ailment.name;
+    // Pure status moves (category "ailment") always apply on hit; damaging moves roll
+    // their secondary chance.
+    const isGuaranteed = move.meta.category.name === "ailment";
+    const chance = isGuaranteed ? 100 : move.meta.ailment_chance;
+
+    // PokeAPI only knows a plain "poison" ailment; Toxic/Poison Fang/Malignant Chain
+    // actually badly poison.
+    if (ailmentName === "poison" && TOXIC_MOVES.has(move.name)) ailmentName = "toxic";
+
+    const isMajor = ["paralysis", "burn", "poison", "toxic", "sleep", "freeze"].includes(ailmentName);
+    // leech-seed, yawn, disable, ... come through as "ailments" too but aren't statuses.
+    if (ailmentName !== "confusion" && !isMajor) return;
+
+    const defenderTypes = defender.types.map((t) => t.type.name);
+    const immune =
+        (STATUS_IMMUNE_TYPES[ailmentName] || []).some((t) => defenderTypes.includes(t)) ||
+        (POWDER_MOVES.has(move.name) && defenderTypes.includes("grass"));
+    if (immune) {
+        if (isGuaranteed) text.push("It doesn't affect " + pokemonNameToString(defender) + "!");
+        return;
+    }
+
+    if (ailmentName === "confusion") {
+        if (defender.confusion) {
+            if (isGuaranteed) text.push("But it failed!");
+            return;
+        }
+        if (Math.random() * 100 >= chance) return;
+        defender.confusion = { counter: 2 + Math.floor(Math.random() * 4) };
+        text.push(pokemonNameToString(defender) + " became confused!");
+        return;
+    }
+
+    if (defender.status) {
+        if (isGuaranteed) text.push("But it failed!");
+        return;
+    }
+    if (Math.random() * 100 >= chance) return;
+    defender.status =
+        ailmentName === "sleep"
+            ? { name: "sleep", counter: 1 + Math.floor(Math.random() * 3) }
+            : ailmentName === "toxic"
+            ? { name: "toxic", counter: 1 }
+            : { name: ailmentName };
+    text.push(pokemonNameToString(defender) + " is now afflicted with " + ailmentName + "!");
+}
+
 export function doAttack(attacker, defender, move, defenderTeam) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
@@ -387,6 +459,14 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     // Fling: fails if the attacker has nothing to throw
     if (move.name === "fling" && !attacker.item) {
         text.push("But it failed!");
+        return text;
+    }
+
+    // Any other status move deals no damage, so skip the whole damage/reactive-item
+    // pipeline below (it would otherwise trigger things like Weakness Policy or resist
+    // berries off a hit that never happened). Only its ailment, if it has one, applies.
+    if (move.damage_class.name === "status") {
+        tryInflictAilment(attacker, defender, move, text);
         return text;
     }
 
@@ -555,38 +635,21 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         applyBerryEffect(attacker, stolenBerry, text);
     }
 
-    // Status ailments / confusion (Thunder Wave, Toxic, Confuse Ray, and damage moves
-    // with a secondary ailment chance like Nuzzle). Only one major status at a time;
-    // confusion is tracked separately since it can stack with a major status.
+    // A frozen target thaws when hit by a Fire-type damaging move (Polar Flare excepted)
+    // or by one of the few moves flagged to thaw their target (Scald, Steam Eruption, ...).
     if (
-        move.meta &&
-        move.meta.ailment &&
-        move.meta.ailment.name !== "none" &&
-        defender.hp[0] > 0
+        defender.status &&
+        defender.status.name === "freeze" &&
+        damage_number > 0 &&
+        defender.hp[0] > 0 &&
+        ((move.type.name === "fire" && move.name !== "polar-flare") ||
+            THAWS_TARGET_MOVES.has(move.name))
     ) {
-        const ailmentName = move.meta.ailment.name;
-        const isGuaranteed = move.meta.category.name === "ailment";
-        const chance = isGuaranteed ? 100 : move.meta.ailment_chance;
-
-        if (ailmentName === "confusion") {
-            if (!defender.confusion && Math.random() * 100 < chance) {
-                defender.confusion = { counter: 2 + Math.floor(Math.random() * 4) };
-                text.push(pokemonNameToString(defender) + " became confused!");
-            }
-        } else if (
-            ["paralysis", "burn", "poison", "toxic", "sleep", "freeze"].includes(ailmentName) &&
-            !defender.status &&
-            Math.random() * 100 < chance
-        ) {
-            defender.status =
-                ailmentName === "sleep"
-                    ? { name: "sleep", counter: 1 + Math.floor(Math.random() * 3) }
-                    : ailmentName === "toxic"
-                    ? { name: "toxic", counter: 1 }
-                    : { name: ailmentName };
-            text.push(pokemonNameToString(defender) + " is now afflicted with " + ailmentName + "!");
-        }
+        defender.status = null;
+        text.push(pokemonNameToString(defender) + " thawed out!");
     }
+
+    tryInflictAilment(attacker, defender, move, text);
 
     if (
         attacker.hp[0] < attacker.hp[1] &&
@@ -683,12 +746,18 @@ export function doSwitch(pokemon, index) {
     let oldCurrent = pokemon[0];
     resetStatChanges(oldCurrent); // Reset stat changes on switch out
     oldCurrent.lockedMove = null;
+    // Confusion is a volatile status: it doesn't survive a switch. (Major statuses do,
+    // except that a badly-poisoned mon's toxic counter restarts.)
+    oldCurrent.confusion = null;
+    if (oldCurrent.status && oldCurrent.status.name === "toxic") oldCurrent.status.counter = 1;
     let text = "";
     if (oldCurrent.hp[0] > 0)
         text = "Switch out " + pokemonNameToString(oldCurrent) + "! ";
     pokemon[0] = pokemon[index];
     pokemon[index] = oldCurrent;
     pokemon[0].lockedMove = null;
+    pokemon[0].confusion = null;
+    if (pokemon[0].status && pokemon[0].status.name === "toxic") pokemon[0].status.counter = 1;
     text = text + "Switch in " + pokemonNameToString(pokemon[0]) + "!";
     resetStatChanges(pokemon); // Reset stat changes on switch in
     return text;
@@ -700,7 +769,7 @@ export function doMoveEffects(attacker, defender, move) {
         attacker.hp[0] > 0 &&
         move.meta &&
         move.meta.stat_chance === 100 &&
-        move.meta.category.name === "damage+raise"
+        move.meta.category.name === "damage-raise" // was "damage+raise", which PokeAPI never returns
     ) {
         addArrayToArray(text, doStatChanges(attacker, move));
     }
@@ -708,7 +777,7 @@ export function doMoveEffects(attacker, defender, move) {
         defender.hp[0] > 0 &&
         move.meta &&
         move.meta.stat_chance === 100 &&
-        move.meta.category.name === "damage+lower"
+        move.meta.category.name === "damage-lower" // was "damage+lower", which PokeAPI never returns
     ) {
         if (defender.item && defender.item.name === COVERT_CLOAK) {
             text.push(
@@ -752,6 +821,8 @@ export function doStatChanges(pokemon, move) {
     for (const stat of move.stat_changes) {
         let text = "";
         const stat_index = stat_names.indexOf(stat.stat.name);
+        // accuracy/evasion (Mud-Slap, Sand Attack, ...) aren't tracked by this engine
+        if (stat_index === -1) continue;
         pokemon.stat_levels[stat_index] =
             pokemon.stat_levels[stat_index] + stat.change;
         let change = stat.change < 0 ? " lowered!" : " raised!";
@@ -797,12 +868,14 @@ function doEndOfTurn(pokemon) {
         text.push(pokemonNameToString(pokemon) + " is hurt by poison!");
         if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
     } else if (pokemon.status && pokemon.status.name === "toxic") {
+        // Showdown: floor(maxHP / 16) * stage, with the stage capped at 15
         pokemon.hp[0] = Math.max(
             0,
-            pokemon.hp[0] - Math.floor((pokemon.hp[1] * pokemon.status.counter) / 16)
+            pokemon.hp[0] -
+                Math.max(1, Math.floor(pokemon.hp[1] / 16)) * pokemon.status.counter
         );
         text.push(pokemonNameToString(pokemon) + " is hurt by poison!");
-        pokemon.status.counter += 1;
+        pokemon.status.counter = Math.min(pokemon.status.counter + 1, 15);
         if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
     }
 

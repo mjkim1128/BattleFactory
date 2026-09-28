@@ -49,7 +49,16 @@ export function Home() {
             for (const poke of arr) {
                 poke.hp[0] = poke.hp[1];
                 poke.stat_levels = Array(5).fill(0);
+                /// Nothing battle-specific should leak into the next fight
+                poke.status = null;
+                poke.confusion = null;
+                poke.lockedMove = null;
+                poke.lastMoveName = null;
+                poke.moveRepeatCount = 0;
             }
+            /// Reflect/Light Screen live on the team array itself, not on a pokemon
+            arr.reflectTurns = 0;
+            arr.lightScreenTurns = 0;
         }
         setPlayerPokemon(temp);
         setOpponentPokemon(dumb);
@@ -176,6 +185,7 @@ export function Home() {
                             move.power > 120 || move.name === "volt-tackle" ? 150 : 120;
                     else if (
                         move.meta &&
+                        move.damage_class.name !== "status" && /// status moves have no power to clamp
                         move.priority === 0 &&
                         move.meta.stat_chance !== 100
                     ) {
@@ -245,7 +255,7 @@ export function Home() {
             } else if (move.meta && move.meta.drain < 0)
                 move.power =
                     move.power > 120 || move.name === "volt-tackle" ? 150 : 120;
-            else if (move.meta && move.priority === 0 && move.meta.stat_chance !== 100) {
+            else if (move.meta && move.damage_class.name !== "status" && move.priority === 0 && move.meta.stat_chance !== 100) {
                 if (move.power < 75) move.power = 75;
                 if (move.power > 95) move.power = 95;
                 else if (move.name === "tri-attack")

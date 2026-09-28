@@ -11,21 +11,18 @@ import {
     UNREMOVABLE_ITEMS,
     getFlingPower,
 } from "./iteminfo";
-
-// Moves whose whole effect is item-swapping/removal. In the real games these aren't
-// blocked by type immunity at all (unlike e.g. Thunder Wave vs Ground or Toxic vs
-// Poison/Steel), but our type chart is applied to every move regardless of category,
-// so without this they'd silently "fail" against, say, a Dark-type target for Trick.
-const TYPE_IMMUNE_EXEMPT_MOVES = new Set([
-    "trick",
-    "switcheroo",
-    "bestow",
-    "recycle",
-    "corrosive-gas",
-]);
+import { STATUS_TYPE_BLOCKED_MOVES } from "./movemechanics";
 
 export function typeEffectiveness(move, defender) {
-    if (TYPE_IMMUNE_EXEMPT_MOVES.has(move.name)) return 1;
+    // Status moves aren't affected by the type chart (Trick vs Dark, Hypnosis vs Dark,
+    // Will-O-Wisp vs Water all work), except the handful Showdown marks
+    // ignoreImmunity: false (Thunder Wave vs Ground).
+    if (
+        move.damage_class &&
+        move.damage_class.name === "status" &&
+        !STATUS_TYPE_BLOCKED_MOVES.has(move.name)
+    )
+        return 1;
     if (
         move.type.name === "ground" &&
         defender.item &&
@@ -42,6 +39,7 @@ export function typeEffectiveness(move, defender) {
 }
 
 export function damageCalc(attacker, defender, move) {
+    if (move.damage_class.name === "status") return 0; // status moves never deal damage
     let type = typeEffectiveness(move, defender);
     let category = move.damage_class.name;
     let [attack, defense] =

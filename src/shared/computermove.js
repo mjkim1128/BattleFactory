@@ -37,12 +37,16 @@ export function makeMove(playerTeam, opponentTeam) {
 export function strongestMove(playerTeam, opponentTeam) {
     let damage = 0;
     let choice = null;
-    for (const move of usableMoveset(opponentTeam[0])) {
+    const moves = usableMoveset(opponentTeam[0]);
+    for (const move of moves) {
         [damage, choice] =
             damageCalc(opponentTeam[0], playerTeam[0], move) > damage
                 ? [damageCalc(opponentTeam[0], playerTeam[0], move), move]
                 : [damage, choice];
     }
+    // Nothing deals damage (all status moves, or all immune): still return a real move,
+    // callers assume this never returns null.
+    if (choice === null) choice = moves[Math.floor(Math.random() * moves.length)];
     return choice;
 }
 
