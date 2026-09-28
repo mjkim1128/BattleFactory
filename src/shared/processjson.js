@@ -138,6 +138,9 @@ export function getCustomMoveData(move) {
         pp: move.pp,
         priority: move.priority,
         stat_changes: move.stat_changes,
+        // Who the move affects ("user", "selected-pokemon", "all-opponents", ...); this is
+        // what tells a self-buff like Swords Dance apart from a debuff like Growl.
+        target: move.target,
         type: move.type,
     };
 }

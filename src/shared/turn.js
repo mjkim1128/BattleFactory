@@ -12,6 +12,7 @@ import {
     TOXIC_MOVES,
     POWDER_MOVES,
     STATUS_IMMUNE_TYPES,
+    TWO_TURN_MOVES,
 } from "./movemechanics";
 import {
     RESIST_BERRIES,
@@ -384,6 +385,109 @@ function tryItemMove(attacker, defender, move, text) {
     return false;
 }
 
+const SELF_TARGETS = new Set(["user", "user-and-allies", "user-or-ally"]);
+const FOE_TARGETS = new Set(["selected-pokemon", "all-opponents", "random-opponent", "all-other-pokemon"]);
+// Extra HP a self-buffing move costs, as a divisor of max HP (Belly Drum is handled by name).
+const HP_COST_DIVISOR = { "clangorous-soul": 3 };
+// Stat-changing status moves PokeAPI files under "unique" instead of "net-good-stats".
+const EXTRA_STAT_MOVES = new Set(["shell-smash"]);
+
+// Status moves whose whole effect PokeAPI describes as data: self-buffs (Swords Dance,
+// Calm Mind), debuffs (Growl, Charm), and self-heals (Recover, Roost), driven by
+// stat_changes / meta.healing plus the move's target. A few need their own handling
+// because the data alone would be wrong (Belly Drum, Rest, Stuff Cheeks, HP-cost moves).
+function tryStatusMoveEffect(attacker, defender, move, text) {
+    const attackerName = pokemonNameToString(attacker);
+    const category = move.meta && move.meta.category && move.meta.category.name;
+    const target = move.target && move.target.name;
+
+    if (move.name === "belly-drum") {
+        // Pays half its max HP to max out Attack; fails if it can't afford it or is already maxed
+        const cost = Math.floor(attacker.hp[1] / 2);
+        if (attacker.hp[0] <= cost || attacker.stat_levels[0] >= 6) {
+            text.push("But it failed!");
+            return;
+        }
+        attacker.hp[0] -= cost;
+        attacker.stat_levels[0] = 6;
+        text.push(attackerName + " cut its own HP and maximized its Attack!");
+        return;
+    }
+
+    if (move.name === "rest") {
+        // Fully heals and sleeps for two turns, curing any other status first
+        if (attacker.hp[0] >= attacker.hp[1] || (attacker.status && attacker.status.name === "sleep")) {
+            text.push("But it failed!");
+            return;
+        }
+        attacker.hp[0] = attacker.hp[1];
+        attacker.status = { name: "sleep", counter: 2 };
+        text.push(attackerName + " slept and became healthy!");
+        return;
+    }
+
+    if (move.name === "stuff-cheeks") {
+        // Needs a berry to eat; the +2 Defense below is its normal stat_changes handling
+        if (!attacker.item || !attacker.item.name.endsWith("-berry")) {
+            text.push("But it failed!");
+            return;
+        }
+        const berry = attacker.item;
+        text.push(attackerName + " ate its " + itemLabel(attacker) + "!");
+        consumeItem(attacker);
+        applyBerryEffect(attacker, berry, text);
+    }
+
+    if (
+        (category === "net-good-stats" || EXTRA_STAT_MOVES.has(move.name)) &&
+        move.stat_changes &&
+        move.stat_changes.length > 0
+    ) {
+        if (TWO_TURN_MOVES.has(move.name)) return; // Geomancy needs its charge turn, unsupported
+        // accuracy/evasion (Double Team, Sand Attack, ...) aren't tracked by this engine
+        const changes = move.stat_changes.filter((s) => STAT_NAMES.includes(s.stat.name));
+        if (changes.length === 0) return;
+
+        let recipient = null;
+        if (SELF_TARGETS.has(target)) recipient = attacker;
+        // A buff aimed at "selected-pokemon" (Decorate) is meant for an ally, so only
+        // debuffs (Growl, Charm, Screech) are applied to the opponent.
+        else if (FOE_TARGETS.has(target) && changes.every((s) => s.change < 0)) recipient = defender;
+        if (!recipient) return;
+
+        const divisor = HP_COST_DIVISOR[move.name];
+        if (divisor) {
+            const cost = Math.floor(attacker.hp[1] / divisor);
+            if (attacker.hp[0] <= cost) {
+                text.push("But it failed!");
+                return;
+            }
+            attacker.hp[0] -= cost;
+            text.push(attackerName + " cut its own HP to power up!");
+        }
+        addArrayToArray(text, doStatChanges(recipient, { stat_changes: changes }));
+        return;
+    }
+
+    if (
+        category === "heal" &&
+        move.meta.healing > 0 &&
+        SELF_TARGETS.has(target) &&
+        move.name !== "swallow" // scales with Stockpile layers, which don't exist here
+    ) {
+        if (attacker.hp[0] >= attacker.hp[1]) {
+            text.push("But it failed!");
+            return;
+        }
+        const amount = Math.floor((attacker.hp[1] * move.meta.healing) / 100);
+        const healed = Math.min(amount, attacker.hp[1] - attacker.hp[0]);
+        attacker.hp[0] += healed;
+        text.push(
+            attackerName + " healed " + Math.round((healed / attacker.hp[1]) * 1000) / 10 + "% HP!"
+        );
+    }
+}
+
 // Status ailments / confusion (Thunder Wave, Toxic, Confuse Ray, and damage moves with a
 // secondary ailment chance like Nuzzle). Only one major status at a time; confusion is
 // tracked separately since it can stack with a major status.
@@ -466,7 +570,10 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     // pipeline below (it would otherwise trigger things like Weakness Policy or resist
     // berries off a hit that never happened). Only its ailment, if it has one, applies.
     if (move.damage_class.name === "status") {
+        tryStatusMoveEffect(attacker, defender, move, text);
         tryInflictAilment(attacker, defender, move, text);
+        // Moves that cost HP (Belly Drum) can put the user in range of its Sitrus Berry
+        if (attacker.hp[0] > 0) tryConsumeHpTriggeredItem(attacker, text);
         return text;
     }
 
