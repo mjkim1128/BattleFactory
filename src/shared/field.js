@@ -56,8 +56,10 @@ export function ensureField(teamA, teamB) {
     return field;
 }
 
+// The weather that is actually in effect: Cloud Nine / Air Lock (field.suppressed, kept up to
+// date by the battle) switch it off without ending it.
 export function weatherOf(field) {
-    return field && field.weather ? field.weather.name : null;
+    return field && field.weather && !field.suppressed ? field.weather.name : null;
 }
 export function terrainOf(field) {
     return field && field.terrain ? field.terrain.name : null;
@@ -217,11 +219,18 @@ export function weatherHealPercent(move, field) {
     return null;
 }
 
+// Abilities that shrug off a weather's chip damage
+const WEATHER_DAMAGE_IMMUNE = {
+    sand: ["sand-veil", "sand-rush", "sand-force"],
+    hail: ["snow-cloak", "slush-rush", "ice-body"],
+};
+
 // End-of-turn weather damage (1/16 max HP) for whoever the weather hurts.
 export function weatherEndOfTurnDamage(pokemon, field) {
     const weather = weatherOf(field);
     const ability = pokemon.ability && pokemon.ability.name;
     if (ability === "overcoat" || ability === "magic-guard") return 0; // (abilities.js can't be imported here)
+    if (weather && (WEATHER_DAMAGE_IMMUNE[weather] || []).includes(ability)) return 0;
     const types = pokemon.types.map((t) => t.type.name);
     if (weather === "sand" && !types.some((t) => ["rock", "ground", "steel"].includes(t))) return Math.floor(pokemon.hp[1] / 16);
     if (weather === "hail" && !types.includes("ice")) return Math.floor(pokemon.hp[1] / 16);

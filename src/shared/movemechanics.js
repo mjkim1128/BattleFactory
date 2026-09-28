@@ -59,6 +59,16 @@ export const DANCE_MOVES = new Set(MECHANICS.dance.filter((m) => m !== "lunar-da
 // punching moves Iron Fist boosts (Showdown's `secondary` / flags.punch).
 export const SECONDARY_MOVES = new Set(MECHANICS.secondary);
 export const PUNCH_MOVES = new Set(MECHANICS.punch);
+// Showdown's other move flags that abilities key off (Strong Jaw, Mega Launcher, Sharpness,
+// Soundproof/Punk Rock, Bulletproof, Wind Rider)
+export const BITE_MOVES = new Set(MECHANICS.bite);
+export const PULSE_MOVES = new Set(MECHANICS.pulse);
+export const SLICING_MOVES = new Set(MECHANICS.slicing);
+export const SOUND_MOVES = new Set(MECHANICS.sound);
+export const BULLET_MOVES = new Set(MECHANICS.bullet);
+export const WIND_MOVES = new Set(MECHANICS.wind);
+// Damp stops these
+export const EXPLOSIVE_MOVES = new Set(["explosion", "self-destruct", "mind-blown", "misty-explosion"]);
 
 // Moves that always land a critical hit (Showdown's willCrit).
 export const ALWAYS_CRIT_MOVES = new Set(["flower-trick", "frost-breath", "storm-throw", "surging-strikes", "wicked-blow"]);

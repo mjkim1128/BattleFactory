@@ -17,6 +17,9 @@ import {
     abilityAttackMod,
     abilityBasePowerMod,
     abilityDamageMod,
+    abilityDefenseMod,
+    abilityCritMultiplier,
+    isWonderGuard,
     abilityStabMultiplier,
     absorbsMove,
     ignoresBoosts,
@@ -55,6 +58,8 @@ export function typeEffectiveness(move, defender, attacker = null) {
         defender.types.filter((t) => t.type.name === "water").length > 0
     )
         TE = TE * 4; // Freeze-dry vs water type
+    // Wonder Guard: anything that isn't super effective bounces off
+    if (TE !== 0 && TE <= 1 && isWonderGuard(defender, attacker)) return 0;
     return TE;
 }
 
@@ -98,11 +103,12 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
 
     attack = statCalc(attack, attack_level);
     defense = statCalc(defense, defense_level);
-    attack = Math.floor(attack * abilityAttackMod(attacker, defender, move, category)); // e.g. Stakeout
+    attack = Math.floor(attack * abilityAttackMod(attacker, defender, move, category, field)); // e.g. Stakeout
 
     // Sandstorm gives Rock types x1.5 Sp. Def, Snow gives Ice types x1.5 Def (the stat the
     // move actually targets: Psyshock & co. hit the Defense stat even though they're special)
     const targetsDefense = category === "physical" || move.name === "psyshock" || move.name === "psystrike" || move.name === "secret-sword";
+    defense = Math.floor(defense * abilityDefenseMod(attacker, defender, move, targetsDefense ? "physical" : "special", field)); // Fur Coat, Ruin abilities...
     const defenderTypes = defender.types.map((t) => t.type.name);
     if (weatherOf(field) === "sand" && !targetsDefense && defenderTypes.includes("rock")) defense = Math.floor(defense * 1.5);
     if (weatherOf(field) === "snow" && targetsDefense && defenderTypes.includes("ice")) defense = Math.floor(defense * 1.5);
@@ -130,13 +136,14 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     }
 
     power *= powerFieldMod(move, attacker, defender, field);
-    power *= abilityBasePowerMod(attacker, defender, move);
+    power *= abilityBasePowerMod(attacker, defender, move, field);
+    power *= move.abilityPowerMod || 1; // Pixilate & co. already changed the move's type
 
     let STAB = calculateSTAB(attacker, move) ? abilityStabMultiplier(attacker) : 1;
     let damage = (42 * power * (attack / defense)) / 50 + 2;
     damage = Math.floor(damage * weatherDamageMod(move, field));
-    damage = Math.floor(damage * abilityDamageMod(attacker, defender, move, type));
-    if (crit) damage = Math.floor(damage * 1.5);
+    damage = Math.floor(damage * abilityDamageMod(attacker, defender, move, type, field));
+    if (crit) damage = Math.floor(damage * abilityCritMultiplier(attacker));
     damage = Math.floor(damage * STAB * type);
     return damage;
 }

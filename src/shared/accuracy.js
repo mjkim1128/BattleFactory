@@ -1,7 +1,7 @@
 import { OHKO_MOVES, IGNORE_EVASION_MOVES } from "./movemechanics";
 import { WIDE_LENS } from "./iteminfo";
 import { weatherAccuracy } from "./field";
-import { abilityAccuracyMod, ignoresBoosts } from "./abilities";
+import { abilityAccuracyMod, abilityEvasionMod, ignoresBoosts, ignoresEvasion, hasNoGuard } from "./abilities";
 
 // Accuracy, following Pokemon Showdown's hitStepAccuracy (sim/battle-actions.ts): the
 // move's base accuracy, Wide Lens, then the accuracy/evasion stat stages, rolled against
@@ -47,6 +47,9 @@ export function hitChance(attacker, defender, move, field = null) {
     if (!isRolled(move)) return null;
     if (move.name === "toxic" && attacker.types.some((t) => t.type.name === "poison")) return null;
 
+    // No Guard on either side: every move connects
+    if (hasNoGuard(attacker) || hasNoGuard(defender)) return null;
+
     // One-hit KO moves ignore every accuracy modifier
     if (isOhkoMove(move)) {
         const isIce = attacker.types.some((t) => t.type.name === "ice");
@@ -58,13 +61,15 @@ export function hitChance(attacker, defender, move, field = null) {
         accuracy = Math.floor((accuracy * 4505) / 4096); // Wide Lens: x1.1
     }
     // Compound Eyes (x1.3) / Victory Star (x1.1)
-    accuracy = Math.floor(accuracy * abilityAccuracyMod(attacker));
+    accuracy = Math.floor(accuracy * abilityAccuracyMod(attacker, move));
+    // The target's own ability (Sand Veil, Snow Cloak, Tangled Feet, Wonder Skin)
+    accuracy = Math.floor(accuracy * abilityEvasionMod(defender, attacker, move, field));
     // Unaware on either side ignores the other's accuracy/evasion stages
     const accuracyStage = ignoresBoosts(defender, attacker)
         ? 0
         : clamp((attacker.stat_levels && attacker.stat_levels[5]) || 0, -6, 6);
     const evasionStage =
-        IGNORE_EVASION_MOVES.has(move.name) || ignoresBoosts(attacker)
+        IGNORE_EVASION_MOVES.has(move.name) || ignoresBoosts(attacker) || ignoresEvasion(attacker)
             ? 0
             : (defender.stat_levels && defender.stat_levels[6]) || 0;
     const boost = clamp(accuracyStage - evasionStage, -6, 6);
