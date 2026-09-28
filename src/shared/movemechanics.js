@@ -55,6 +55,11 @@ export const ESCALATING_MULTIHIT = new Set(["triple-axel", "triple-kick"]);
 export const REFLECTABLE_MOVES = new Set(MECHANICS.reflectable);
 export const DANCE_MOVES = new Set(MECHANICS.dance.filter((m) => m !== "lunar-dance" && m !== "petal-dance"));
 
+// Moves with a secondary effect (Sheer Force removes it and powers the move up), and the
+// punching moves Iron Fist boosts (Showdown's `secondary` / flags.punch).
+export const SECONDARY_MOVES = new Set(MECHANICS.secondary);
+export const PUNCH_MOVES = new Set(MECHANICS.punch);
+
 // Moves that always land a critical hit (Showdown's willCrit).
 export const ALWAYS_CRIT_MOVES = new Set(["flower-trick", "frost-breath", "storm-throw", "surging-strikes", "wicked-blow"]);
 // Trapping: damaging moves that bind the target for a few turns (PokeAPI ailment "trap"),

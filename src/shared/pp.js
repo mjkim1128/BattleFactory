@@ -68,6 +68,7 @@ export function getUsableMoves(pokemon) {
         const locked = moves.filter((m) => m.name === pokemon.lockedMove);
         if (locked.length > 0) moves = locked;
     }
-    const usable = moves.filter(hasPP);
+    // Disable (Cursed Body...) shuts one move off for a few turns
+    const usable = moves.filter((m) => hasPP(m) && !(pokemon.disabled && pokemon.disabled.move === m.name));
     return usable.length > 0 ? usable : [STRUGGLE];
 }

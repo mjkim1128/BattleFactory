@@ -70,6 +70,7 @@ export function isGrounded(pokemon) {
     if (pokemon.types.some((t) => t.type.name === "flying")) return false;
     if (pokemon.item && pokemon.item.name === "air-balloon") return false;
     if (pokemon.levitates) return false;
+    if (pokemon.ability && pokemon.ability.name === "levitate") return false;
     return true;
 }
 
@@ -219,6 +220,8 @@ export function weatherHealPercent(move, field) {
 // End-of-turn weather damage (1/16 max HP) for whoever the weather hurts.
 export function weatherEndOfTurnDamage(pokemon, field) {
     const weather = weatherOf(field);
+    const ability = pokemon.ability && pokemon.ability.name;
+    if (ability === "overcoat" || ability === "magic-guard") return 0; // (abilities.js can't be imported here)
     const types = pokemon.types.map((t) => t.type.name);
     if (weather === "sand" && !types.some((t) => ["rock", "ground", "steel"].includes(t))) return Math.floor(pokemon.hp[1] / 16);
     if (weather === "hail" && !types.includes("ice")) return Math.floor(pokemon.hp[1] / 16);

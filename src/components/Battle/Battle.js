@@ -16,6 +16,7 @@ import {
     STRUGGLE,
     WEATHER_LABEL,
     TERRAIN_LABEL,
+    HAZARD_LABEL,
     switchPokemon,
     lodash,
     arraysEqual,
@@ -177,6 +178,19 @@ export function Battle(props) {
         if (playerType === "player") {
             setAnnouncerMessage([text]);
         }
+        /// The replacement can faint to entry hazards the moment it arrives
+        if (pokemonArr[0].hp[0] <= 0) {
+            if (pokemonArr === props.opponentPokemon) {
+                return forcedSwitch(props.opponentPokemon, -1); /// the CPU sends in another (or the fight ends)
+            }
+            if (props.playerPokemon.filter((poke) => poke.hp[0] > 0).length === 0) {
+                setGameOver(true);
+                updateHistory();
+                return;
+            }
+            setForceSwitch(true); /// the player has to pick again
+            return;
+        }
         if (playerType === "player" && props.opponentPokemon[0].hp[0] === 0)
             return forcedSwitch(props.opponentPokemon, -1);
         updateHistory();
@@ -216,14 +230,29 @@ export function Battle(props) {
 
     /// Weather / terrain currently in play, e.g. "비 (3턴) · 그래스필드 (5턴)"
     const field = props.playerPokemon.field;
-    const fieldText = field
-        ? [
-              field.weather && `${WEATHER_LABEL[field.weather.name]} (${field.weather.turns}턴)`,
-              field.terrain && `${TERRAIN_LABEL[field.terrain.name]} (${field.terrain.turns}턴)`,
-          ]
-              .filter(Boolean)
-              .join(" · ")
-        : "";
+    /// Stealth Rock, Spikes... waiting on each side, e.g. "스텔스록, 압정뿌리기 x2"
+    const hazardsOf = (team) => {
+        const h = team.hazards;
+        if (!h) return "";
+        return [
+            h.stealthRock && HAZARD_LABEL.stealthRock,
+            h.spikes > 0 && `${HAZARD_LABEL.spikes} x${h.spikes}`,
+            h.toxicSpikes > 0 && `${HAZARD_LABEL.toxicSpikes} x${h.toxicSpikes}`,
+            h.stickyWeb && HAZARD_LABEL.stickyWeb,
+        ]
+            .filter(Boolean)
+            .join(", ");
+    };
+    const myHazards = hazardsOf(props.playerPokemon);
+    const theirHazards = hazardsOf(props.opponentPokemon);
+    const fieldText = [
+        field && field.weather && `${WEATHER_LABEL[field.weather.name]} (${field.weather.turns}턴)`,
+        field && field.terrain && `${TERRAIN_LABEL[field.terrain.name]} (${field.terrain.turns}턴)`,
+        myHazards && `내 쪽 함정: ${myHazards}`,
+        theirHazards && `상대 쪽 함정: ${theirHazards}`,
+    ]
+        .filter(Boolean)
+        .join(" · ");
     let isCurrent = !(stepNumber < history.length);
     let displaypokes = isCurrent
         ? props.playerPokemon

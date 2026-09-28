@@ -53,6 +53,7 @@ export const ITEM_POOL = [
     "smooth-rock",
     "icy-rock",
     "shed-shell",
+    "heavy-duty-boots",
     // Berries
     "colbur-berry",
     "shuca-berry",
@@ -168,6 +169,7 @@ export const LOADED_DICE = "loaded-dice";
 export const WIDE_LENS = "wide-lens";
 export const SCOPE_LENS = "scope-lens";
 export const SHED_SHELL = "shed-shell"; // lets its holder switch out even when trapped
+export const HEAVY_DUTY_BOOTS = "heavy-duty-boots"; // entry hazards do nothing to its holder
 // The rock that stretches each weather from 5 to 8 turns when its setter holds it
 export const WEATHER_ROCKS = { sun: "heat-rock", rain: "damp-rock", sand: "smooth-rock", hail: "icy-rock", snow: "icy-rock" };
 
@@ -243,6 +245,7 @@ export const FLING_POWER = {
     "smooth-rock": 10,
     "icy-rock": 40,
     "shed-shell": 10,
+    "heavy-duty-boots": 80,
 };
 export function getFlingPower(itemName) {
     if (itemName.endsWith("-berry")) return 10;

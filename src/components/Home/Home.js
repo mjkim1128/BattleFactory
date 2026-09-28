@@ -67,6 +67,7 @@ export function Home() {
                 resetAbilityState(poke); /// ability, Transform, Illusion... back to how it started
                 poke.disguiseBusted = false;
                 poke.hangry = false;
+                poke.disabled = null;
                 restorePP(poke); /// PP is topped up in the Pokemon Center too
                 poke.lastMoveName = null;
                 poke.moveRepeatCount = 0;
@@ -80,6 +81,7 @@ export function Home() {
             arr.auroraTurns = 0;
             arr.field = null; /// weather and terrain don't carry over into the next battle
             arr.entered = false; /// on-entry abilities fire again at the start of the next battle
+            arr.hazards = null; /// Stealth Rock & co. are gone after the fight
             arr.pendingSwitch = null;
             arr.pivotRequest = null;
         }

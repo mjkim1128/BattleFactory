@@ -94,7 +94,13 @@ export function Move(props) {
                     disabled={
                         props.moveOwner !== "party" &&
                         props.move.name !== "struggle" &&
-                        ppLeft(props.move) <= 0
+                        (ppLeft(props.move) <= 0 ||
+                            /// Disable (e.g. from Cursed Body) shuts the move off for a few turns
+                            !!(
+                                props.attackerDefender &&
+                                props.attackerDefender[0].disabled &&
+                                props.attackerDefender[0].disabled.move === props.move.name
+                            ))
                     }
                     onClick={() => props.onClick(props.move)}
                     onMouseOver={(e) => {

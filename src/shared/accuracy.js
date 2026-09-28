@@ -1,6 +1,7 @@
 import { OHKO_MOVES, IGNORE_EVASION_MOVES } from "./movemechanics";
 import { WIDE_LENS } from "./iteminfo";
 import { weatherAccuracy } from "./field";
+import { abilityAccuracyMod, ignoresBoosts } from "./abilities";
 
 // Accuracy, following Pokemon Showdown's hitStepAccuracy (sim/battle-actions.ts): the
 // move's base accuracy, Wide Lens, then the accuracy/evasion stat stages, rolled against
@@ -56,10 +57,16 @@ export function hitChance(attacker, defender, move, field = null) {
     if (attacker.item && attacker.item.name === WIDE_LENS) {
         accuracy = Math.floor((accuracy * 4505) / 4096); // Wide Lens: x1.1
     }
-    const accuracyStage = clamp((attacker.stat_levels && attacker.stat_levels[5]) || 0, -6, 6);
-    const evasionStage = IGNORE_EVASION_MOVES.has(move.name)
+    // Compound Eyes (x1.3) / Victory Star (x1.1)
+    accuracy = Math.floor(accuracy * abilityAccuracyMod(attacker));
+    // Unaware on either side ignores the other's accuracy/evasion stages
+    const accuracyStage = ignoresBoosts(defender, attacker)
         ? 0
-        : (defender.stat_levels && defender.stat_levels[6]) || 0;
+        : clamp((attacker.stat_levels && attacker.stat_levels[5]) || 0, -6, 6);
+    const evasionStage =
+        IGNORE_EVASION_MOVES.has(move.name) || ignoresBoosts(attacker)
+            ? 0
+            : (defender.stat_levels && defender.stat_levels[6]) || 0;
     const boost = clamp(accuracyStage - evasionStage, -6, 6);
     if (boost > 0) accuracy = Math.floor((accuracy * (3 + boost)) / 3);
     else if (boost < 0) accuracy = Math.floor((accuracy * 3) / (3 - boost));

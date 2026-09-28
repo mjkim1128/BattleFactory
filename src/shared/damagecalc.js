@@ -13,9 +13,19 @@ import {
 } from "./iteminfo";
 import { STATUS_TYPE_BLOCKED_MOVES } from "./movemechanics";
 import { weatherOf, weatherDamageMod, powerFieldMod } from "./field";
-import { abilityAttackMod } from "./abilities";
+import {
+    abilityAttackMod,
+    abilityBasePowerMod,
+    abilityDamageMod,
+    abilityStabMultiplier,
+    absorbsMove,
+    ignoresBoosts,
+    ignoresBurnDrop,
+    isGroundImmune,
+    ignoresGhostImmunity,
+} from "./abilities";
 
-export function typeEffectiveness(move, defender) {
+export function typeEffectiveness(move, defender, attacker = null) {
     // Status moves aren't affected by the type chart (Trick vs Dark, Hypnosis vs Dark,
     // Will-O-Wisp vs Water all work), except the handful Showdown marks
     // ignoreImmunity: false (Thunder Wave vs Ground).
@@ -26,6 +36,8 @@ export function typeEffectiveness(move, defender) {
     )
         return 1;
     if (move.name === "struggle") return 1; // typeless: never resisted, never immune
+    // Levitate: Ground moves don't touch it (unless the attacker has Mold Breaker)
+    if (move.type.name === "ground" && isGroundImmune(defender, attacker)) return 0;
     if (
         move.type.name === "ground" &&
         defender.item &&
@@ -33,6 +45,11 @@ export function typeEffectiveness(move, defender) {
     )
         return 0; // Air Balloon grounds immunity, popped separately once the holder is hit by anything else
     let TE = PogeyData.getMoveResult(move, defender);
+    // Scrappy: Normal/Fighting moves can hit Ghost types after all
+    if (TE === 0 && attacker && ignoresGhostImmunity(attacker, move) && defender.types.some((t) => t.type.name === "ghost")) {
+        const rest = defender.types.filter((t) => t.type.name !== "ghost");
+        TE = rest.length > 0 ? PogeyData.getMoveResult(move, { ...defender, types: rest }) : 1;
+    }
     if (
         move.name === "freeze-dry" &&
         defender.types.filter((t) => t.type.name === "water").length > 0
@@ -45,7 +62,8 @@ export function typeEffectiveness(move, defender) {
 export function damageCalc(attacker, defender, move, ctx = {}) {
     if (move.damage_class.name === "status") return 0; // status moves never deal damage
     const { crit = false, field = null } = ctx;
-    let type = typeEffectiveness(move, defender);
+    let type = typeEffectiveness(move, defender, attacker);
+    if (absorbsMove(defender, attacker, move)) return 0; // Water Absorb & co. take it instead
     let category = move.damage_class.name;
     let [attack, defense] =
         category === "physical"
@@ -63,6 +81,9 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
         attack_level = Math.max(attack_level, 0);
         defense_level = Math.min(defense_level, 0);
     }
+    // Unaware ignores the other side's stat stages
+    if (ignoresBoosts(attacker)) defense_level = 0;
+    if (ignoresBoosts(defender, attacker)) attack_level = 0;
 
     // Choice Band/Specs: 1.5x the stat that matches this move's category
     const choiceStatIndex = attacker.item && CHOICE_ITEMS[attacker.item.name];
@@ -87,7 +108,7 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     if (weatherOf(field) === "snow" && targetsDefense && defenderTypes.includes("ice")) defense = Math.floor(defense * 1.5);
 
     // Burn: halves the attack stat used by physical moves
-    if (attacker.status && attacker.status.name === "burn" && category === "physical")
+    if (attacker.status && attacker.status.name === "burn" && category === "physical" && !ignoresBurnDrop(attacker))
         attack = Math.floor(attack / 2);
 
     let power = move.priority < 0 ? move.power * 2 : move.power; // Double power of negative priority moves
@@ -109,10 +130,12 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     }
 
     power *= powerFieldMod(move, attacker, defender, field);
+    power *= abilityBasePowerMod(attacker, defender, move);
 
-    let STAB = calculateSTAB(attacker, move) ? 1.5 : 1;
+    let STAB = calculateSTAB(attacker, move) ? abilityStabMultiplier(attacker) : 1;
     let damage = (42 * power * (attack / defense)) / 50 + 2;
     damage = Math.floor(damage * weatherDamageMod(move, field));
+    damage = Math.floor(damage * abilityDamageMod(attacker, defender, move, type));
     if (crit) damage = Math.floor(damage * 1.5);
     damage = Math.floor(damage * STAB * type);
     return damage;

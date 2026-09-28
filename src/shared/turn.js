@@ -8,14 +8,37 @@ import {
 import { CONTACT_MOVES } from "./legalmoves";
 import { FOE_TARGETS, isOhkoMove, ohkoImmune, rollAccuracy } from "./accuracy";
 import { spendPP } from "./pp";
+import {
+    HAZARD_MOVES,
+    CLEAR_OWN_SIDE_MOVES,
+    CLEAR_BOTH_SIDES_MOVES,
+    setHazard,
+    clearHazards,
+    applyHazards,
+} from "./hazards";
 import { rollCrit } from "./crit";
 import {
     abilityName,
     abilityBlocksStatus,
+    abilityModifyBoost,
+    abilityBlocksDrop,
     bouncesMoves,
     ignoresAbilities,
     runHook,
     resetAbilityState,
+    absorbsMove,
+    tryAbsorb,
+    blocksOhko,
+    sturdyEndures,
+    bypassesScreens,
+    hasNoRecoil,
+    isPowderImmune,
+    hasUnburden,
+    hasPoisonHeal,
+    boostsStatusPriority,
+    removesSecondaries,
+    chanceMultiplier,
+    indirectDamageBlocked,
 } from "./abilities";
 import {
     ensureField,
@@ -55,6 +78,7 @@ import {
     FIRST_TURN_ONLY_MOVES,
     REFLECTABLE_MOVES,
     DANCE_MOVES,
+    SECONDARY_MOVES,
 } from "./movemechanics";
 import {
     RESIST_BERRIES,
@@ -84,6 +108,36 @@ import {
     STATUS_CURE_BERRIES,
     SHED_SHELL,
 } from "./iteminfo";
+
+// The actions ability handlers can take (they live in abilities.js, which can't import this
+// file): change stats, hurt/heal, give a status, disable a move.
+function abilityApi(field) {
+    return {
+        boost: (pokemon, changes, t, source = null) => {
+            addArrayToArray(t, doStatChanges(pokemon, { stat_changes: changes }, source));
+            tryConsumeWhiteHerb(pokemon, t);
+        },
+        inflictStatus: (pokemon, status, t) => inflictStatusDirect(pokemon, status, t, field),
+        // indirect damage, which Magic Guard shrugs off
+        hurt: (pokemon, amount, t, msg) => {
+            if (indirectDamageBlocked(pokemon) || pokemon.hp[0] <= 0) return;
+            pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.max(1, amount));
+            t.push(pokemonNameToString(pokemon) + msg);
+            if (pokemon.hp[0] === 0) t.push(pokemonNameToString(pokemon) + " fainted!");
+        },
+        heal: (pokemon, amount, t, msg) => {
+            const healed = Math.min(amount, pokemon.hp[1] - pokemon.hp[0]);
+            if (healed <= 0 || pokemon.hp[0] <= 0) return 0;
+            pokemon.hp[0] += healed;
+            t.push(pokemonNameToString(pokemon) + msg);
+            return healed;
+        },
+        disable: (pokemon, move, t) => {
+            pokemon.disabled = { move: move.name, turns: 5 };
+            t.push(pokemonNameToString(pokemon) + "'s " + moveNameToString(move) + " was disabled!");
+        },
+    };
+}
 
 function hasCustapBoost(pokemon) {
     return (
@@ -170,6 +224,8 @@ function getEffectiveSpeed(pokemon) {
     let speed = statCalc(pokemon.base_stats[5], pokemon.stat_levels[4]);
     if (pokemon.item && pokemon.item.name === "choice-scarf") speed = Math.floor(speed * 1.5);
     if (pokemon.status && pokemon.status.name === "paralysis") speed = Math.floor(speed / 2);
+    // Unburden: twice as fast once its item is gone
+    if (!pokemon.item && pokemon.originalItem && hasUnburden(pokemon)) speed *= 2;
     return speed;
 }
 
@@ -218,7 +274,9 @@ export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
     move = forcedMove(playerPokemon[0], move);
     const cpuMove = forcedMove(opponentPokemon[0], makeMove(playerPokemon, opponentPokemon));
     const priorityOf = (mv, mon) =>
-        (mv.priority === 6 ? 6 : adaptMoveToField(mv, mon, field).priority) + (hasCustapBoost(mon) ? 1 : 0);
+        (mv.priority === 6 ? 6 : adaptMoveToField(mv, mon, field).priority) +
+        (hasCustapBoost(mon) ? 1 : 0) +
+        (mv.priority !== 6 && mv.damage_class.name === "status" && boostsStatusPriority(mon) ? 1 : 0); // Prankster
     let playerPriority = priorityOf(move, playerPokemon[0]);
     let cpuPriority = priorityOf(cpuMove, opponentPokemon[0]);
     let movefirst = playerPriority > cpuPriority ? true : false;
@@ -235,7 +293,7 @@ export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
 function runEntryAbilities(team, foeTeam, field) {
     const text = [];
     const self = team[0];
-    runHook(self, "onSwitchIn", { foe: foeTeam[0], selfTeam: team, foeTeam, field, text, selfIsPlayer: !!team.isPlayerSide }, foeTeam[0]);
+    runHook(self, "onSwitchIn", { foe: foeTeam[0], selfTeam: team, foeTeam, field, text, selfIsPlayer: !!team.isPlayerSide, ...abilityApi(field) }, foeTeam[0]);
     runHook(self, "onUpdate", { field, text });
     return text;
 }
@@ -332,6 +390,10 @@ export function playerTurn(playerPokemon, opponentPokemon, chosenMove) {
         return text;
     }
 
+    if (attacker.disabled && attacker.disabled.move === chosenMove.name && chosenMove.name !== "struggle") {
+        text.push(pokemonNameToString(attacker) + "'s " + moveNameToString(chosenMove) + " is disabled!");
+        return text;
+    }
     // Using a move spends a PP (the second turn of a two-turn move is free)
     if (attacker.charging !== chosenMove.name) spendPP(chosenMove);
     executeMove(playerPokemon, opponentPokemon, chosenMove, text, {});
@@ -349,6 +411,8 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
 
     if (trySetupScreen(playerPokemon, move, text, field)) return;
     if (tryStartCharge(attacker, move, text, field)) return;
+    // Protean / Libero change the user's type to the move's, before anything else happens
+    if (!opts.bounced) runHook(attacker, "onPrepareMove", { move, text });
 
     const foe = opponentPokemon[0];
     // Fake Out / First Impression only work on the turn right after switching in
@@ -376,7 +440,7 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
         !opts.bounced &&
         foe.hp[0] > 0 &&
         move.damage_class.name === "status" &&
-        aimsAtFoe(move) &&
+        (aimsAtFoe(move) || (move.target && move.target.name === "opponents-field")) &&
         REFLECTABLE_MOVES.has(move.name) &&
         bouncesMoves(foe, attacker)
     ) {
@@ -386,14 +450,33 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
         return;
     }
 
-    // One-hit KO moves can't touch an immune type (Sheer Cold vs Ice)
-    if (foe.hp[0] > 0 && ohkoImmune(foe, move)) {
+    // Prankster's boosted status moves don't work on Dark types
+    if (
+        !opts.bounced &&
+        foe.hp[0] > 0 &&
+        move.damage_class.name === "status" &&
+        aimsAtFoe(move) &&
+        boostsStatusPriority(attacker) &&
+        foe.types.some((t) => t.type.name === "dark")
+    ) {
+        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+        text.push("It doesn't affect " + pokemonNameToString(foe) + "!");
+        return;
+    }
+    // Water Absorb / Volt Absorb / Flash Fire / Sap Sipper...: the move is soaked up instead
+    if (foe.hp[0] > 0 && typeEffectiveness(move, foe, attacker) !== 0 && absorbsMove(foe, attacker, move)) {
+        text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
+        tryAbsorb(foe, attacker, move, text, abilityApi(field));
+        return;
+    }
+    // One-hit KO moves can't touch an immune type (Sheer Cold vs Ice), or a Sturdy pokemon
+    if (foe.hp[0] > 0 && (ohkoImmune(foe, move) || (isOhkoMove(move) && blocksOhko(foe, attacker)))) {
         text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
         text.push("It doesn't affect " + pokemonNameToString(foe) + "!");
         return;
     }
     // Accuracy is checked after immunity, before anything happens (like Showdown)
-    if (foe.hp[0] > 0 && typeEffectiveness(move, foe) !== 0 && !rollAccuracy(attacker, foe, move, field)) {
+    if (foe.hp[0] > 0 && typeEffectiveness(move, foe, attacker) !== 0 && !rollAccuracy(attacker, foe, move, field)) {
         text.push(pokemonNameToString(attacker) + " used " + moveNameToString(move) + "!");
         text.push(pokemonNameToString(attacker) + "'s attack missed!");
         if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
@@ -403,18 +486,34 @@ function executeMove(playerPokemon, opponentPokemon, chosenMove, text, opts) {
     }
 
     addArrayToArray(text, turnText(attacker, foe, move));
-    if (typeEffectiveness(move, foe) === 0) tryCrashDamage(attacker, move, text);
-    if (typeEffectiveness(move, foe) !== 0) {
+    if (typeEffectiveness(move, foe, attacker) === 0) tryCrashDamage(attacker, move, text);
+    if (typeEffectiveness(move, foe, attacker) !== 0) {
         addArrayToArray(text, doAttack(attacker, foe, move, opponentPokemon));
         trackMetronome(attacker, move);
         if (attacker.item && CHOICE_ITEMS[attacker.item.name] !== undefined)
             attacker.lockedMove = move.name;
         /// temporary fix for moves giving me errors
         if (move.meta !== undefined)
-            addArrayToArray(text, doMoveEffects(attacker, foe, move));
+            addArrayToArray(text, doMoveEffects(attacker, foe, move, { sheerForced: removesSecondaries(attacker) && SECONDARY_MOVES.has(move.name) }));
         if (RECHARGE_MOVES.has(move.name) && attacker.hp[0] > 0) attacker.mustRecharge = true;
+        // Rapid Spin & Mortal Spin free the user's side (and the user from being bound);
+        // Defog & Tidy Up clear both sides, Defog also blowing away the foe's screens
+        if (CLEAR_OWN_SIDE_MOVES.has(move.name) && attacker.hp[0] > 0) {
+            clearHazards(playerPokemon, text);
+            attacker.trap = null;
+        }
+        if (CLEAR_BOTH_SIDES_MOVES.has(move.name)) {
+            clearHazards(playerPokemon, text);
+            clearHazards(opponentPokemon, text);
+            if (move.name === "defog") {
+                opponentPokemon.reflectTurns = 0;
+                opponentPokemon.lightScreenTurns = 0;
+                opponentPokemon.auroraTurns = 0;
+                addArrayToArray(text, doStatChanges(foe, { stat_changes: [{ stat: { name: "evasion" }, change: -1 }] }, attacker));
+            }
+        }
         tryRequestPivot(playerPokemon, foe, move, text);
-        runHook(attacker, "onAfterMove", { foe, move, text });
+        runHook(attacker, "onAfterMove", { foe, move, text, ...abilityApi(field) });
     }
 
     // Dancer: the other side copies a dance move right after it is used
@@ -637,18 +736,18 @@ export function turnText(attacker, defender, move) {
         text.push("But it failed!");
         return text;
     }
-    if (typeEffectiveness(move, defender) === 0) {
+    if (typeEffectiveness(move, defender, attacker) === 0) {
         text.push(
             "It doesnt't affect " + pokemonNameToString(defender) + "!"
         );
     }
     if (
         move.damage_class.name !== "status" && // a status move deals no damage, so no effectiveness text
-        typeEffectiveness(move, defender) > 0 &&
-        typeEffectiveness(move, defender) !== 1
+        typeEffectiveness(move, defender, attacker) > 0 &&
+        typeEffectiveness(move, defender, attacker) !== 1
     ) {
         let t =
-            typeEffectiveness(move, defender) > 1
+            typeEffectiveness(move, defender, attacker) > 1
                 ? " It's super effective!"
                 : " It's not very effective...";
         text[0] = text[0] + t;
@@ -776,10 +875,16 @@ const EXTRA_STAT_MOVES = new Set(["shell-smash"]);
 // Calm Mind), debuffs (Growl, Charm), and self-heals (Recover, Roost), driven by
 // stat_changes / meta.healing plus the move's target. A few need their own handling
 // because the data alone would be wrong (Belly Drum, Rest, Stuff Cheeks, HP-cost moves).
-function tryStatusMoveEffect(attacker, defender, move, text, field) {
+function tryStatusMoveEffect(attacker, defender, move, text, field, defenderTeam) {
     const attackerName = pokemonNameToString(attacker);
     const category = move.meta && move.meta.category && move.meta.category.name;
     const target = move.target && move.target.name;
+
+    // Stealth Rock, Spikes, Toxic Spikes, Sticky Web: laid on the opposing side
+    if (HAZARD_MOVES[move.name]) {
+        if (!defenderTeam || !setHazard(defenderTeam, HAZARD_MOVES[move.name], text)) text.push("But it failed!");
+        return;
+    }
 
     // Weather and terrain moves (Sunny Day, Electric Terrain, ...)
     if (WEATHER_MOVES[move.name] || TERRAIN_MOVES[move.name]) {
@@ -884,7 +989,7 @@ function tryStatusMoveEffect(attacker, defender, move, text, field) {
             attacker.hp[0] -= cost;
             text.push(attackerName + " cut its own HP to power up!");
         }
-        addArrayToArray(text, doStatChanges(recipient, { stat_changes: changes }));
+        addArrayToArray(text, doStatChanges(recipient, { stat_changes: changes }, recipient === attacker ? null : attacker));
         return;
     }
 
@@ -955,7 +1060,7 @@ function tryInflictAilment(attacker, defender, move, text, field) {
     // Pure status moves (category "ailment") always apply on hit; damaging moves roll
     // their secondary chance.
     const isGuaranteed = move.meta.category.name === "ailment";
-    const chance = isGuaranteed ? 100 : move.meta.ailment_chance;
+    const chance = isGuaranteed ? 100 : move.meta.ailment_chance * chanceMultiplier(attacker); // Serene Grace
 
     // PokeAPI only knows a plain "poison" ailment; Toxic/Poison Fang/Malignant Chain
     // actually badly poison.
@@ -968,7 +1073,7 @@ function tryInflictAilment(attacker, defender, move, text, field) {
     const defenderTypes = defender.types.map((t) => t.type.name);
     const immune =
         (STATUS_IMMUNE_TYPES[ailmentName] || []).some((t) => defenderTypes.includes(t)) ||
-        (POWDER_MOVES.has(move.name) && defenderTypes.includes("grass"));
+        (POWDER_MOVES.has(move.name) && (defenderTypes.includes("grass") || isPowderImmune(defender, attacker)));
     if (immune) {
         if (isGuaranteed) text.push("It doesn't affect " + pokemonNameToString(defender) + "!");
         return;
@@ -1009,6 +1114,8 @@ function tryInflictAilment(attacker, defender, move, text, field) {
             ? { name: "toxic", counter: 1 }
             : { name: ailmentName };
     text.push(pokemonNameToString(defender) + " is now afflicted with " + ailmentName + "!");
+    // Synchronize: a burn/paralysis/poison it was given is passed straight back
+    runHook(defender, "onStatusInflicted", { attacker, status: ailmentName, text, ...abilityApi(field) });
     tryConsumeStatusCureItem(defender, text);
 }
 
@@ -1029,6 +1136,8 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     let text = [];
     if (defender.hp[0] <= 0) return text; // attempt to stop turn when mon dies to recoil
     const field = defenderTeam ? ensureField(defenderTeam, null) : null;
+    // Sheer Force drops a move's secondary effect (and its Life Orb recoil) for extra power
+    const sheerForced = removesSecondaries(attacker) && SECONDARY_MOVES.has(move.name) && move.damage_class.name !== "status";
 
     // Non-damaging item-swap/removal moves (Trick, Switcheroo, Corrosive Gas, Bestow, Recycle)
     if (tryItemMove(attacker, defender, move, text)) return text;
@@ -1048,7 +1157,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     // pipeline below (it would otherwise trigger things like Weakness Policy or resist
     // berries off a hit that never happened). Only its ailment, if it has one, applies.
     if (move.damage_class.name === "status") {
-        tryStatusMoveEffect(attacker, defender, move, text, field);
+        tryStatusMoveEffect(attacker, defender, move, text, field, defenderTeam);
         tryInflictAilment(attacker, defender, move, text, field);
         // Moves that cost HP (Belly Drum) can put the user in range of its Sitrus Berry
         if (attacker.hp[0] > 0) tryConsumeHpTriggeredItem(attacker, text);
@@ -1069,11 +1178,11 @@ export function doAttack(attacker, defender, move, defenderTeam) {
         const ohko = isOhkoMove(move); // Fissure & co. deal exactly the target's remaining HP
         const isCrit = !ohko && rollCrit(attacker, defender, move);
         let damage = ohko ? defender.hp[0] : damageCalc(attacker, defender, hitMove, { crit: isCrit, field });
-        const typeEff = typeEffectiveness(move, defender);
+        const typeEff = typeEffectiveness(move, defender, attacker);
 
         // Reflect/Light Screen/Aurora Veil: halve incoming damage of the matching category for
         // the defending side while the screen is still up (a critical hit goes right through).
-        if (defenderTeam && !ohko && !isCrit) {
+        if (defenderTeam && !ohko && !isCrit && !bypassesScreens(attacker)) {
             if (
                 (move.damage_class.name === "physical" && defenderTeam.reflectTurns > 0) ||
                 (move.damage_class.name === "special" && defenderTeam.lightScreenTurns > 0) ||
@@ -1103,6 +1212,11 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             consumeItem(defender);
         }
 
+        // Sturdy: survive a would-be KO from full HP with 1 HP
+        if (sturdyEndures(defender, attacker, defender.hp[0], damage)) {
+            damage = defender.hp[0] - 1;
+            text.push(pokemonNameToString(defender) + " endured the hit!");
+        }
         // Focus Sash: survive a would-be KO from full HP with 1 HP, then is consumed
         let sashSaved = false;
         if (
@@ -1189,7 +1303,8 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             defender.item &&
             defender.item.name === ROCKY_HELMET &&
             damage_number > 0 &&
-            attacker.hp[0] > 0
+            attacker.hp[0] > 0 &&
+            !indirectDamageBlocked(attacker)
         ) {
             attacker.hp[0] = Math.max(0, attacker.hp[0] - Math.floor(attacker.hp[1] / 6));
             text.push(pokemonNameToString(attacker) + " was hurt by Rocky Helmet!");
@@ -1216,8 +1331,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
                 move,
                 damage: damage_number,
                 text,
-                boost: (pokemon, changes, t) => addArrayToArray(t, doStatChanges(pokemon, { stat_changes: changes })),
-                inflictStatus: (pokemon, status, t) => inflictStatusDirect(pokemon, status, t, field),
+                ...abilityApi(field),
             }, attacker);
             // ...and a hit that takes it to half HP or less can trigger Emergency Exit
             if (defender.hp[0] > 0 && hpBefore > defender.hp[1] / 2 && defender.hp[0] <= defender.hp[1] / 2 && defenderTeam) {
@@ -1286,13 +1400,14 @@ export function doAttack(attacker, defender, move, defenderTeam) {
             text.push(pokemonNameToString(defender) + " thawed out!");
         }
 
-        tryInflictAilment(attacker, defender, move, text, field);
+        if (!sheerForced) tryInflictAilment(attacker, defender, move, text, field);
 
         // Secondary flinch (Air Slash, Bite, Fake Out...): only matters if the target hasn't
         // moved yet this turn, since the flinch is wiped at the end of the turn. Covert Cloak
         // blocks it.
-        const flinchChance = move.meta && move.meta.flinch_chance;
+        const flinchChance = move.meta && move.meta.flinch_chance * chanceMultiplier(attacker);
         if (
+            !sheerForced &&
             flinchChance > 0 &&
             damage_number > 0 &&
             defender.hp[0] > 0 &&
@@ -1314,6 +1429,10 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     }
     damage_number = totalDamage;
     if (hitsLanded > 1) text.push("Hit " + hitsLanded + " times!");
+    // Knocking something out (Moxie, Beast Boost...)
+    if (defender.hp[0] === 0 && attacker.hp[0] > 0 && totalDamage > 0) {
+        runHook(attacker, "onKO", { defender, text, ...abilityApi(field) });
+    }
 
     if (
         attacker.hp[0] < attacker.hp[1] &&
@@ -1347,7 +1466,7 @@ export function doAttack(attacker, defender, move, defenderTeam) {
                 Math.round((hpNumber / attacker.hp[1]) * 1000) / 10 +
                 "% HP!"
         );
-    } else if (move.meta && move.meta.drain < 0) {
+    } else if (move.meta && move.meta.drain < 0 && !hasNoRecoil(attacker) && !indirectDamageBlocked(attacker)) {
         // Recoil
         let hpNumber = 0;
         [hpNumber, attacker.hp[0]] =
@@ -1390,6 +1509,8 @@ export function doAttack(attacker, defender, move, defenderTeam) {
     if (
         attacker.hp[0] > 0 &&
         damage_number > 0 &&
+        !sheerForced &&
+        !indirectDamageBlocked(attacker) &&
         attacker.item &&
         attacker.item.name === LIFE_ORB
     ) {
@@ -1419,7 +1540,13 @@ export function doSwitch(pokemon, index, options = {}) {
     const passed = options.baton
         ? { stat_levels: [...oldCurrent.stat_levels], confusion: oldCurrent.confusion, focusEnergy: oldCurrent.focusEnergy }
         : null;
+    // Abilities that act on leaving (Regenerator, Natural Cure)
+    const leaveText = [];
+    if (oldCurrent.hp[0] > 0) {
+        runHook(oldCurrent, "onSwitchOut", { selfTeam: pokemon, text: leaveText, ...abilityApi(pokemon.field) });
+    }
     resetAbilityState(oldCurrent); // undo Transform / borrowed abilities / Illusion
+    oldCurrent.disabled = null;
     resetStatChanges(oldCurrent); // Reset stat changes on switch out
     oldCurrent.lockedMove = null;
     oldCurrent.charging = null;
@@ -1435,7 +1562,7 @@ export function doSwitch(pokemon, index, options = {}) {
     if (oldCurrent.status && oldCurrent.status.name === "toxic") oldCurrent.status.counter = 1;
     let text = "";
     if (oldCurrent.hp[0] > 0)
-        text = "Switch out " + pokemonNameToString(oldCurrent) + "! ";
+        text = "Switch out " + pokemonNameToString(oldCurrent) + "! " + (leaveText.length > 0 ? leaveText.join(" ") + " " : "");
     pokemon[0] = pokemon[index];
     pokemon[index] = oldCurrent;
     pokemon[0].lockedMove = null;
@@ -1446,6 +1573,7 @@ export function doSwitch(pokemon, index, options = {}) {
     pokemon[0].focusEnergy = false;
     pokemon[0].actionsSinceSwitch = 0;
     pokemon[0].activeTurns = 0;
+    pokemon[0].disabled = null;
     pokemon[0].confusion = null;
     if (pokemon[0].status && pokemon[0].status.name === "toxic") pokemon[0].status.counter = 1;
     resetStatChanges(pokemon[0]); // Reset stat changes on switch in
@@ -1456,13 +1584,28 @@ export function doSwitch(pokemon, index, options = {}) {
     }
     // Abilities that trigger on entering (Intimidate, Illusion, Imposter...); the on-entry
     // text is tacked onto the switch line since callers expect a single string back
-    const entry = options.foeTeam ? runEntryAbilities(pokemon, options.foeTeam, ensureField(pokemon, options.foeTeam)) : [];
     text = text + "Switch in " + pokemonNameToString(pokemon[0]) + "!";
-    return entry.length > 0 ? text + " " + entry.join(" ") : text;
+    // Entry hazards hit first; a pokemon that faints to them never gets its ability going
+    const hazardText = [];
+    applyHazards(pokemon[0], pokemon, hazardText, (p, changes, t) =>
+        addArrayToArray(t, doStatChanges(p, { stat_changes: changes }))
+    );
+    const entry =
+        options.foeTeam && pokemon[0].hp[0] > 0
+            ? runEntryAbilities(pokemon, options.foeTeam, ensureField(pokemon, options.foeTeam))
+            : [];
+    const extra = [...hazardText, ...entry];
+    return extra.length > 0 ? text + " " + extra.join(" ") : text;
 }
 
-export function doMoveEffects(attacker, defender, move) {
+export function doMoveEffects(attacker, defender, move, opts = {}) {
     let text = [];
+    // Sheer Force strips the secondary stat changes off the moves it powers up
+    if (opts.sheerForced) {
+        tryConsumeWhiteHerb(attacker, text);
+        tryConsumeWhiteHerb(defender, text);
+        return text;
+    }
     if (
         attacker.hp[0] > 0 &&
         move.meta &&
@@ -1483,7 +1626,7 @@ export function doMoveEffects(attacker, defender, move) {
                     "'s Covert Cloak protected it from the effect!"
             );
         } else {
-            addArrayToArray(text, doStatChanges(defender, move));
+            addArrayToArray(text, doStatChanges(defender, move, attacker));
         }
     }
     tryConsumeWhiteHerb(attacker, text);
@@ -1514,18 +1657,30 @@ function doStatChangesRaw(pokemon, changes) {
     });
 }
 
-export function doStatChanges(pokemon, move) {
+// Changes `pokemon`'s stat stages. `source` is who caused it when that's another pokemon
+// (Growl, Intimidate...): their drops can be stopped by Clear Body and set off Defiant, while
+// Contrary/Simple rewrite every change the owner gets, its own included.
+export function doStatChanges(pokemon, move, source = null) {
     let texts = [];
     const stat_names = STAT_NAMES;
     // A pokemon from before accuracy/evasion existed only has five stages
     while (pokemon.stat_levels.length < STAT_NAMES.length) pokemon.stat_levels.push(0);
+    const fromFoe = source && source !== pokemon;
+    let droppedByFoe = false;
     for (const stat of move.stat_changes) {
         let text = "";
         const stat_index = stat_names.indexOf(stat.stat.name);
         if (stat_index === -1) continue; // not a stage this engine tracks (HP, ...)
-        pokemon.stat_levels[stat_index] =
-            pokemon.stat_levels[stat_index] + stat.change;
-        let change = stat.change < 0 ? " lowered!" : " raised!";
+        const delta = abilityModifyBoost(pokemon, stat.change, fromFoe ? source : null);
+        if (delta < 0 && fromFoe) {
+            const blocker = abilityBlocksDrop(pokemon, stat.stat.name, source);
+            if (blocker) {
+                texts.push(pokemonNameToString(pokemon) + "'s " + blocker + " prevents its stats from being lowered!");
+                continue;
+            }
+        }
+        pokemon.stat_levels[stat_index] = pokemon.stat_levels[stat_index] + delta;
+        let change = delta < 0 ? " lowered!" : " raised!";
         text =
             pokemonNameToString(pokemon) +
             " had it's " +
@@ -1545,8 +1700,14 @@ export function doStatChanges(pokemon, move) {
                 "'s " +
                 statNameToString(stat_names[stat_index]) +
                 " can't go higher!";
+        } else if (delta < 0 && fromFoe) {
+            droppedByFoe = true;
         }
         texts.push(text);
+    }
+    // Defiant / Competitive answer a stat drop from the other side
+    if (droppedByFoe && pokemon.hp[0] > 0) {
+        runHook(pokemon, "onStatDropped", { text: texts, ...abilityApi(null) }, source);
     }
     return texts;
 }
@@ -1563,6 +1724,7 @@ function doEndOfTurn(pokemon, field, foe) {
     let text = [];
     if (pokemon.hp[0] <= 0) return text;
 
+    const magicGuard = indirectDamageBlocked(pokemon);
     // Sandstorm / hail chip damage
     const weatherDamage = weatherEndOfTurnDamage(pokemon, field);
     if (weatherDamage > 0) {
@@ -1583,7 +1745,20 @@ function doEndOfTurn(pokemon, field, foe) {
         text.push(pokemonNameToString(pokemon) + "'s HP was restored by the Grassy Terrain!");
     }
 
-    if (pokemon.status && pokemon.status.name === "burn") {
+    if (
+        hasPoisonHeal(pokemon) &&
+        pokemon.status &&
+        (pokemon.status.name === "poison" || pokemon.status.name === "toxic")
+    ) {
+        // Poison Heal turns poison into healing (1/8 max HP)
+        const healed = Math.min(Math.floor(pokemon.hp[1] / 8), pokemon.hp[1] - pokemon.hp[0]);
+        if (healed > 0) {
+            pokemon.hp[0] += healed;
+            text.push(pokemonNameToString(pokemon) + " was healed by its Poison Heal!");
+        }
+    } else if (magicGuard && pokemon.status && ["burn", "poison", "toxic"].includes(pokemon.status.name)) {
+        // Magic Guard: the status stays, the damage doesn't
+    } else if (pokemon.status && pokemon.status.name === "burn") {
         pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 16));
         text.push(pokemonNameToString(pokemon) + " is hurt by its burn!");
         if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
@@ -1612,12 +1787,12 @@ function doEndOfTurn(pokemon, field, foe) {
             if (isPoison) {
                 const msg = healPercent(pokemon, Math.floor(pokemon.hp[1] / 16), " restored a little HP using its ");
                 if (msg) text.push(msg);
-            } else {
+            } else if (!magicGuard) {
                 pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
                 text.push(pokemonNameToString(pokemon) + " was hurt by its Black Sludge!");
                 if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
             }
-        } else if (pokemon.item.name === STICKY_BARB) {
+        } else if (pokemon.item.name === STICKY_BARB && !magicGuard) {
             pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
             text.push(pokemonNameToString(pokemon) + " was hurt by its Sticky Barb!");
             if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
@@ -1646,7 +1821,15 @@ function doEndOfTurn(pokemon, field, foe) {
 
     // Abilities that act at the end of every turn (Cud Chew, Hunger Switch...)
     if (pokemon.hp[0] > 0) {
-        runHook(pokemon, "onResidual", { field, text, applyBerry: applyBerryEffect });
+        runHook(pokemon, "onResidual", { field, text, applyBerry: applyBerryEffect, ...abilityApi(field) });
+    }
+    // A disabled move comes back after a few turns
+    if (pokemon.disabled) {
+        pokemon.disabled.turns -= 1;
+        if (pokemon.disabled.turns <= 0) {
+            pokemon.disabled = null;
+            text.push(pokemonNameToString(pokemon) + " is no longer disabled!");
+        }
     }
 
     // Being bound (Wrap, Fire Spin...) hurts every turn until it runs out; any trap ends
@@ -1660,7 +1843,7 @@ function doEndOfTurn(pokemon, field, foe) {
             if (trap.turns <= 0) {
                 pokemon.trap = null;
                 text.push(pokemonNameToString(pokemon) + " was freed!");
-            } else {
+            } else if (!magicGuard) {
                 pokemon.hp[0] = Math.max(0, pokemon.hp[0] - Math.floor(pokemon.hp[1] / 8));
                 text.push(pokemonNameToString(pokemon) + " is hurt by being trapped!");
                 if (pokemon.hp[0] === 0) text.push(pokemonNameToString(pokemon) + " fainted!");
