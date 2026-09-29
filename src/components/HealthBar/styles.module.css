@@ -27,5 +27,5 @@
 .value {
     height: 100%;
     background-color: rgb(25, 225, 25);
-    transition: 1s;
+    transition: width 0.4s ease-out;
 }
