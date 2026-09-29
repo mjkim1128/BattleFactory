@@ -152,8 +152,14 @@ import {
     SHED_SHELL,
 } from "./iteminfo";
 import { PogeyData } from "./pogey";
+import lodash from "lodash";
 import METRONOME_POOL from "./metronome_pool.json";
 import MIRROR_MOVE_LIST from "./mirror_moves.json";
+
+// A snapshot of both teams' full state, for replaying a turn one beat at a time in the UI.
+function snapshotTeams(playerPokemon, opponentPokemon) {
+    return { playerPokemon: lodash.cloneDeep(playerPokemon), opponentPokemon: lodash.cloneDeep(opponentPokemon) };
+}
 
 const jsonClone = (x) => JSON.parse(JSON.stringify(x));
 const MIRROR_MOVES = new Set(MIRROR_MOVE_LIST);
@@ -399,7 +405,11 @@ export function doTurn(playerPokemon, opponentPokemon, chosenMove) {
             movefirst = field.trickRoom ? mine < theirs : mine > theirs; // Trick Room: the slower one goes first
         }
     }
-    return addArrayToArray(entryText, runTurn(playerPokemon, opponentPokemon, { playerFirst: movefirst, move, cpuMove }, 0));
+    const frames = [];
+    if (entryText.length > 0) frames.push({ text: entryText, ...snapshotTeams(playerPokemon, opponentPokemon) });
+    const rest = runTurn(playerPokemon, opponentPokemon, { playerFirst: movefirst, move, cpuMove }, 0);
+    frames.push(...rest.frames);
+    return Object.assign(addArrayToArray([...entryText], rest), { frames });
 }
 
 // The on-entry abilities of `team`'s active pokemon; returns the lines they produced.
@@ -416,15 +426,26 @@ function runEntryAbilities(team, foeTeam, field) {
 // step 2 the end-of-turn effects. A turn can pause after a step when the player's pokemon
 // pivots out (U-turn, Baton Pass, ...) and the player has to pick its replacement; the
 // plan is parked on the team as pendingSwitch and resumeTurn() picks it back up.
+// Returns {text, frames}: `frames` breaks the turn into beats (one mover's action, then the
+// other's, then the end-of-turn residual), each with the lines said during it and a full
+// snapshot of both teams right after, so the UI can play a turn out one beat at a time
+// instead of jumping straight to the end result.
 function runTurn(playerPokemon, opponentPokemon, plan, step) {
     let text = [];
+    let frames = [];
+    let frameStart = 0;
+    const pushFrame = () => {
+        if (text.length === frameStart) return;
+        frames.push({ text: text.slice(frameStart), ...snapshotTeams(playerPokemon, opponentPokemon) });
+        frameStart = text.length;
+    };
     const field = ensureField(playerPokemon, opponentPokemon);
     for (; step < 2; step++) {
         const isPlayer = (step === 0) === plan.playerFirst;
         const team = isPlayer ? playerPokemon : opponentPokemon;
         const foeTeam = isPlayer ? opponentPokemon : playerPokemon;
         const move = isPlayer ? plan.move : plan.cpuMove;
-        if (step === 1 && team[0].hp[0] <= 0) return text;
+        if (step === 1 && team[0].hp[0] <= 0) return Object.assign(text, { frames });
         // A side that was switched out (Emergency Exit) before it got to move loses its action
         if (plan.skipSide === (isPlayer ? "player" : "cpu")) continue;
         if (hasCustapBoost(team[0])) consumeItem(team[0]);
@@ -465,7 +486,8 @@ function runTurn(playerPokemon, opponentPokemon, plan, step) {
             if (swapperIsPlayer) {
                 if (swapperActsLater) plan.skipSide = "player";
                 playerPokemon.pendingSwitch = { plan, nextStep: step + 1, baton: pivot.baton };
-                return text;
+                pushFrame();
+                return Object.assign(text, { frames });
             }
             const index = switchPokemon(playerPokemon, opponentPokemon);
             if (index !== -1) {
@@ -473,6 +495,7 @@ function runTurn(playerPokemon, opponentPokemon, plan, step) {
                 text.push(doSwitch(opponentPokemon, index, { baton: pivot.baton, foeTeam: playerPokemon }));
             }
         }
+        pushFrame(); // this mover's whole beat: its move, any drag, any pivot switch-in
     }
     // The weather counts down first (a 5-turn weather deals its damage 4 times, then ends)
     tickWeather(field, text);
@@ -542,19 +565,20 @@ function runTurn(playerPokemon, opponentPokemon, plan, step) {
         team[0].flinched = false; // a flinch only ever lasts the turn it happens in
         team[0].activeTurns = (team[0].activeTurns || 0) + 1;
     }
-    return text;
+    pushFrame(); // the end-of-turn residual: weather/status damage, Wish, room/screen countdowns...
+    return Object.assign(text, { frames });
 }
 
 // Finishes a turn that paused for the player to choose a replacement after a pivot move.
 export function resumeTurn(playerPokemon, opponentPokemon, index) {
     const pending = playerPokemon.pendingSwitch;
     playerPokemon.pendingSwitch = null;
-    if (!pending) return [];
-    const text = [doSwitch(playerPokemon, index, { baton: pending.baton, foeTeam: opponentPokemon })];
-    return addArrayToArray(
-        text,
-        runTurn(playerPokemon, opponentPokemon, pending.plan, pending.nextStep)
-    );
+    if (!pending) return Object.assign([], { frames: [] });
+    const switchText = [doSwitch(playerPokemon, index, { baton: pending.baton, foeTeam: opponentPokemon })];
+    const frames = [{ text: [...switchText], ...snapshotTeams(playerPokemon, opponentPokemon) }];
+    const rest = runTurn(playerPokemon, opponentPokemon, pending.plan, pending.nextStep);
+    frames.push(...rest.frames);
+    return Object.assign(addArrayToArray(switchText, rest), { frames });
 }
 
 export function playerTurn(playerPokemon, opponentPokemon, chosenMove) {

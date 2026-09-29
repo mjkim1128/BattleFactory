@@ -6,7 +6,7 @@ import {
     TurnFeed,
     BattleAnnouncer,
 } from "components";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { SUBSTITUTE_FRONT, SUBSTITUTE_BACK } from "components/StatusBadges";
 import {
     doSwitch,
@@ -20,8 +20,6 @@ import {
     HAZARD_LABEL,
     switchPokemon,
     lodash,
-    arraysEqual,
-    wait,
 } from "shared";
 import "./Battle.css";
 
@@ -39,6 +37,56 @@ export function Battle(props) {
     const [stepNumber, setStepNumber] = useState(0);
     const [announcerMessage, setAnnouncerMessage] = useState([]);
     const [isAnimating, setAnimating] = useState(false);
+    /// A turn plays out one beat at a time instead of jumping straight to the end result:
+    /// animFrames holds the {text, playerPokemon, opponentPokemon} snapshots for the turn
+    /// in progress, animIndex is which one is on screen right now.
+    const [animFrames, setAnimFrames] = useState(null);
+    const [animIndex, setAnimIndex] = useState(0);
+    const animDoneRef = useRef(null);
+    /// A beat needs to stay up long enough for the typewriter (10ms/char, see useTypedMessage)
+    /// to finish typing it out, plus a short pause so it can actually be read.
+    const beatDelay = (frame) => Math.max(900, frame.text.join(" ").length * 10 + 500);
+
+    /// Starts playing `frames` out one at a time; `onDone` runs once the last one has shown
+    /// (or immediately if there's nothing to play). Move/switch input stays locked until then.
+    function playFrames(frames, onDone) {
+        if (!frames || frames.length === 0) {
+            onDone();
+            return;
+        }
+        animDoneRef.current = onDone;
+        setAnimating(true);
+        setAnimFrames(frames);
+        setAnimIndex(0);
+    }
+
+    useEffect(() => {
+        if (!animFrames) return;
+        if (animIndex >= animFrames.length) {
+            setAnimFrames(null);
+            setAnimating(false);
+            const done = animDoneRef.current;
+            animDoneRef.current = null;
+            if (done) done();
+            return;
+        }
+        setAnnouncerMessage(animFrames[animIndex].text);
+        const timer = setTimeout(() => setAnimIndex((i) => i + 1), beatDelay(animFrames[animIndex]));
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [animFrames, animIndex]);
+
+    /// Skips straight to the end of the turn currently playing out (a click during the reveal).
+    function skipAnimation() {
+        if (animFrames) setAnimIndex(animFrames.length);
+    }
+
+    /// What's actually on screen right now: the live board, or (mid-reveal) the snapshot for
+    /// the beat currently showing.
+    const liveState =
+        animFrames && animIndex < animFrames.length
+            ? animFrames[animIndex]
+            : { playerPokemon: props.playerPokemon, opponentPokemon: props.opponentPokemon };
 
     useEffect(() => {
         if (isForceSwitch === false) return;
@@ -67,11 +115,6 @@ export function Battle(props) {
         if (win) props.setWinStreak(props.winStreak + 1);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isGameOver]);
-
-    useEffect(() => {
-        /// wait after move
-        setAnimating(false);
-    }, [announcerMessage, turns]);
 
     useEffect(() => {
         // Update announcer message
@@ -106,54 +149,46 @@ export function Battle(props) {
             return;
         }
         let text = doTurn(props.playerPokemon, props.opponentPokemon, move);
-        let texts = "";
-        for (const t of text) {
-            texts = texts + t;
-        }
         let t = [...turns];
         t.push(text);
         setTurns(t);
-        if (arraysEqual(text, announcerMessage)) text.push(" (again lol)");
-        setAnnouncerMessage(text);
-        if (props.playerPokemon.pendingSwitch) {
-            /// The player's pokemon pivoted out (U-turn, Baton Pass, ...): the turn is paused
-            /// until they pick who comes in. Show the live board so the party is clickable.
-            setForceSwitch(true);
-            setStepNumber(stepNumber + 1);
-        } else if (
-            props.playerPokemon[0].hp[0] === 0 ||
-            props.opponentPokemon[0].hp[0] === 0
-        ) {
-            setForceSwitch(true);
-            if (props.playerPokemon[0].hp[0] === 0)
+        playFrames(text.frames, () => {
+            if (props.playerPokemon.pendingSwitch) {
+                /// The player's pokemon pivoted out (U-turn, Baton Pass, ...): the turn is paused
+                /// until they pick who comes in. Show the live board so the party is clickable.
+                setForceSwitch(true);
                 setStepNumber(stepNumber + 1);
-        } else updateHistory();
-
-        (async () => {
-            setAnimating(true);
-            await wait(100);
-        })();
+            } else if (
+                props.playerPokemon[0].hp[0] === 0 ||
+                props.opponentPokemon[0].hp[0] === 0
+            ) {
+                setForceSwitch(true);
+                if (props.playerPokemon[0].hp[0] === 0)
+                    setStepNumber(stepNumber + 1);
+            } else updateHistory();
+        });
     }
 
     function finishPivot(index) {
         const text = resumeTurn(props.playerPokemon, props.opponentPokemon, index);
         for (const t of text) updateTurnText(t);
-        setAnnouncerMessage(text);
-        const opponentDown = props.opponentPokemon[0].hp[0] <= 0;
-        const playerDown = props.playerPokemon[0].hp[0] <= 0;
-        if (!opponentDown && !playerDown) {
-            setForceSwitch(false);
-            updateHistory();
-            return;
-        }
-        /// Something fainted after the swap; isForceSwitch is already true, so its effect
-        /// won't fire again and the CPU's replacement / game over is handled here.
-        if (props.playerPokemon.filter((poke) => poke.hp[0] > 0).length === 0) {
-            setGameOver(true);
-            updateHistory();
-        } else if (opponentDown && !playerDown) {
-            forcedSwitch(props.opponentPokemon, -1);
-        }
+        playFrames(text.frames, () => {
+            const opponentDown = props.opponentPokemon[0].hp[0] <= 0;
+            const playerDown = props.playerPokemon[0].hp[0] <= 0;
+            if (!opponentDown && !playerDown) {
+                setForceSwitch(false);
+                updateHistory();
+                return;
+            }
+            /// Something fainted after the swap; isForceSwitch is already true, so its effect
+            /// won't fire again and the CPU's replacement / game over is handled here.
+            if (props.playerPokemon.filter((poke) => poke.hp[0] > 0).length === 0) {
+                setGameOver(true);
+                updateHistory();
+            } else if (opponentDown && !playerDown) {
+                forcedSwitch(props.opponentPokemon, -1);
+            }
+        });
     }
 
     function forcedSwitch(pokemonArr, index, playerType = "cpu") {
@@ -176,9 +211,7 @@ export function Battle(props) {
             foeTeam: pokemonArr === props.playerPokemon ? props.opponentPokemon : props.playerPokemon,
         });
         updateTurnText(text);
-        if (playerType === "player") {
-            setAnnouncerMessage([text]);
-        }
+        setAnnouncerMessage([text]);
         /// The replacement can faint to entry hazards the moment it arrives
         if (pokemonArr[0].hp[0] <= 0) {
             if (pokemonArr === props.opponentPokemon) {
@@ -244,16 +277,16 @@ export function Battle(props) {
             .filter(Boolean)
             .join(", ");
     };
-    const myHazards = hazardsOf(props.playerPokemon);
-    const theirHazards = hazardsOf(props.opponentPokemon);
+    const myHazards = hazardsOf(liveState.playerPokemon);
+    const theirHazards = hazardsOf(liveState.opponentPokemon);
     const fieldText = [
         field && field.weather && `${WEATHER_LABEL[field.weather.name]} (${field.weather.turns}턴)`,
         field && field.terrain && `${TERRAIN_LABEL[field.terrain.name]} (${field.terrain.turns}턴)`,
         field && field.trickRoom && `트릭룸 (${field.trickRoom.turns}턴)`,
-        props.playerPokemon.tailwindTurns > 0 && `내 쪽 순풍 (${props.playerPokemon.tailwindTurns}턴)`,
-        props.opponentPokemon.tailwindTurns > 0 && `상대 쪽 순풍 (${props.opponentPokemon.tailwindTurns}턴)`,
-        props.playerPokemon.safeguardTurns > 0 && `내 쪽 신비의부적 (${props.playerPokemon.safeguardTurns}턴)`,
-        props.opponentPokemon.safeguardTurns > 0 && `상대 쪽 신비의부적 (${props.opponentPokemon.safeguardTurns}턴)`,
+        liveState.playerPokemon.tailwindTurns > 0 && `내 쪽 순풍 (${liveState.playerPokemon.tailwindTurns}턴)`,
+        liveState.opponentPokemon.tailwindTurns > 0 && `상대 쪽 순풍 (${liveState.opponentPokemon.tailwindTurns}턴)`,
+        liveState.playerPokemon.safeguardTurns > 0 && `내 쪽 신비의부적 (${liveState.playerPokemon.safeguardTurns}턴)`,
+        liveState.opponentPokemon.safeguardTurns > 0 && `상대 쪽 신비의부적 (${liveState.opponentPokemon.safeguardTurns}턴)`,
         myHazards && `내 쪽 함정: ${myHazards}`,
         theirHazards && `상대 쪽 함정: ${theirHazards}`,
     ]
@@ -261,10 +294,10 @@ export function Battle(props) {
         .join(" · ");
     let isCurrent = !(stepNumber < history.length);
     let displaypokes = isCurrent
-        ? props.playerPokemon
+        ? liveState.playerPokemon
         : history[stepNumber].playerPokemon;
     let currentpoke = isCurrent
-        ? props.playerPokemon[0]
+        ? liveState.playerPokemon[0]
         : history[stepNumber].playerPokemon[0];
     /// A pokemon mid-way through a two-turn move (Fly, Solar Beam, ...) must finish it;
     /// a Choice item locks it to the move it already used.
@@ -287,7 +320,7 @@ export function Battle(props) {
                     onClick={nextTurn}
                     attackerDefender={
                         isCurrent
-                            ? [props.playerPokemon[0], props.opponentPokemon[0]]
+                            ? [liveState.playerPokemon[0], liveState.opponentPokemon[0]]
                             : [
                                   history[stepNumber].playerPokemon[0],
                                   history[stepNumber].opponentPokemon[0],
@@ -309,8 +342,8 @@ export function Battle(props) {
                         attackerDefender={
                             isCurrent
                                 ? [
-                                      props.playerPokemon[i + 1],
-                                      props.opponentPokemon[0],
+                                      liveState.playerPokemon[i + 1],
+                                      liveState.opponentPokemon[0],
                                   ]
                                 : [
                                       history[stepNumber].playerPokemon[i + 1],
@@ -349,21 +382,21 @@ export function Battle(props) {
                     <PokemonParty
                         pokemon={
                             isCurrent
-                                ? props.opponentPokemon
+                                ? liveState.opponentPokemon
                                 : history[stepNumber].opponentPokemon
                         }
                     />
                     <CurrentPokemon
                         pokemon={
                             isCurrent
-                                ? props.opponentPokemon[0]
+                                ? liveState.opponentPokemon[0]
                                 : history[stepNumber].opponentPokemon[0]
                         }
                         substituteImg={SUBSTITUTE_FRONT}
                         img={
                             /// a pokemon under Illusion shows its disguise's sprite
                             (isCurrent
-                                ? props.opponentPokemon[0].illusion || props.opponentPokemon[0]
+                                ? liveState.opponentPokemon[0].illusion || liveState.opponentPokemon[0]
                                 : history[stepNumber].opponentPokemon[0].illusion ||
                                   history[stepNumber].opponentPokemon[0]
                             ).sprites.front_default
@@ -374,13 +407,13 @@ export function Battle(props) {
                     <CurrentPokemon
                         pokemon={
                             isCurrent
-                                ? props.playerPokemon[0]
+                                ? liveState.playerPokemon[0]
                                 : history[stepNumber].playerPokemon[0]
                         }
                         substituteImg={SUBSTITUTE_BACK}
                         img={
                             isCurrent
-                                ? props.playerPokemon[0].sprites.back_default
+                                ? liveState.playerPokemon[0].sprites.back_default
                                 : history[stepNumber].playerPokemon[0].sprites
                                       .back_default
                         }
@@ -389,7 +422,7 @@ export function Battle(props) {
                     <PokemonParty
                         pokemon={
                             isCurrent
-                                ? props.playerPokemon
+                                ? liveState.playerPokemon
                                 : history[stepNumber].playerPokemon
                         }
                         onClick={onSwitch}
@@ -398,9 +431,13 @@ export function Battle(props) {
                         {partyMoves[0]}&nbsp;&nbsp;&nbsp;{partyMoves[1]}
                     </div>
                 </div>
-                <div className="battle-announcer-parent">
+                <div
+                    className="battle-announcer-parent"
+                    onClick={skipAnimation}
+                    style={animFrames ? { cursor: "pointer" } : undefined}
+                >
                     <div className="battle-announcer-child">
-                        {turns.length > 0 && stepNumber > 0 && (
+                        {turns.length > 0 && (
                             <div>
                                 <BattleAnnouncer text={announcerMessage} />
                             </div>
