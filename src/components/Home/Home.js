@@ -63,6 +63,8 @@ export function Home() {
                 poke.flinched = false;
                 poke.trap = null;
                 poke.focusEnergy = false;
+                poke.mistActive = false;
+                poke.torment = false;
                 poke.actionsSinceSwitch = 0;
                 poke.activeTurns = 0;
                 resetAbilityState(poke); /// ability, Transform, Illusion... back to how it started
@@ -88,10 +90,17 @@ export function Home() {
             arr.pivotRequest = null;
             arr.healingWish = null; /// an unused Healing Wish / Lunar Dance is gone
             arr.wish = null;
+            arr.futureAttack = null; /// an unresolved Doom Desire / Future Sight doesn't carry over
             arr.dragRequest = false;
             arr.safeguardTurns = 0;
             arr.tailwindTurns = 0;
             arr.queuedMove = null;
+            arr.mistTurns = 0;
+            arr.luckyChantTurns = 0;
+            arr.quickGuardTurn = false;
+            arr.wideGuardTurn = false;
+            arr.craftyShieldTurn = false;
+            arr.matBlockTurn = false;
         }
         setPlayerPokemon(temp);
         setOpponentPokemon(dumb);

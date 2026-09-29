@@ -48,8 +48,8 @@ export function hitChance(attacker, defender, move, field = null) {
     if (!isRolled(move)) return null;
     if (move.name === "toxic" && attacker.types.some((t) => t.type.name === "poison")) return null;
 
-    // No Guard on either side: every move connects
-    if (hasNoGuard(attacker) || hasNoGuard(defender)) return null;
+    // No Guard on either side, or the target is hanging in the air from Telekinesis: every move connects
+    if (hasNoGuard(attacker) || hasNoGuard(defender) || defender.telekinesis) return null;
 
     // One-hit KO moves ignore every accuracy modifier
     if (isOhkoMove(move)) {
@@ -58,6 +58,7 @@ export function hitChance(attacker, defender, move, field = null) {
     }
 
     let accuracy = base;
+    if (field && field.gravity) accuracy = Math.floor((accuracy * 5) / 3); // Gravity: x1.67 accuracy
     if (activeItem(attacker) && attacker.item.name === WIDE_LENS) {
         accuracy = Math.floor((accuracy * 4505) / 4096); // Wide Lens: x1.1
     }
@@ -82,6 +83,11 @@ export function hitChance(attacker, defender, move, field = null) {
 
 // Rolls the accuracy check: true if the move connects.
 export function rollAccuracy(attacker, defender, move, field = null) {
+    // Lock-On / Mind Reader: the attacker's next move is guaranteed to hit this target
+    if (attacker.lockOn) {
+        attacker.lockOn = null;
+        return true;
+    }
     const chance = hitChance(attacker, defender, move, field);
     return chance === null || Math.floor(Math.random() * 100) < chance;
 }

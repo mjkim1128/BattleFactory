@@ -11,6 +11,7 @@ const CRIT_DENOMINATOR = [24, 8, 2, 1];
 export function critStage(attacker, move) {
     let stage = (move.meta && move.meta.crit_rate) || 0;
     if (attacker.focusEnergy) stage += 2; // Focus Energy
+    if (attacker.laserFocus) stage += 3; // Laser Focus: guarantees a crit
     if (activeItem(attacker) && attacker.item.name === SCOPE_LENS) stage += 1;
     stage += critStageBonus(attacker); // Super Luck
     return stage;

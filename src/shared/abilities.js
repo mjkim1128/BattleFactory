@@ -52,7 +52,12 @@ const MOLD_BREAKER_LIKE = new Set(["mold-breaker", "teravolt", "turboblaze"]);
 const LOCKED_ABILITIES = new Set([
     "comatose", "mummy", "disguise", "gulp-missile", "ice-face", "zen-mode", "stance-change",
     "schooling", "shields-down", "zero-to-hero", "power-construct", "imposter", "illusion", "trace",
+    "multitype", "rks-system", "hunger-switch", "neutralizing-gas",
 ]);
+// Can Role Play / Skill Swap / Worry Seed / Entrainment / Gastro Acid touch this ability?
+export function canChangeAbility(slug) {
+    return !!slug && !LOCKED_ABILITIES.has(slug);
+}
 // Abilities that keep Intimidate away from their owner (Showdown, gen 8+)
 const INTIMIDATE_IMMUNE = new Set(["inner-focus", "oblivious", "own-tempo", "scrappy"]);
 const ALL_STATUSES = ["paralysis", "burn", "poison", "toxic", "sleep", "freeze"];
@@ -1592,6 +1597,30 @@ export function resetAbilityState(pokemon) {
         pokemon.transformBackup = null;
     }
     if (pokemon.baseAbility) pokemon.ability = pokemon.baseAbility;
+    pokemon.abilitySuppressed = false;
+    pokemon.aquaRing = false;
+    pokemon.ingrain = false;
+    pokemon.nightmare = false;
+    pokemon.octolock = null;
+    pokemon.embargo = null;
+    pokemon.telekinesis = null;
+    pokemon.lockOn = null;
+    pokemon.laserFocus = null;
+    pokemon.stockpile = 0;
+    pokemon.imprison = null;
+    pokemon.bideTurns = 0;
+    pokemon.bideDamage = 0;
+    pokemon.torment = false;
+    pokemon.tarShot = false;
+    pokemon.attract = false;
+    pokemon.grudge = false;
+    pokemon.electrify = false;
+    pokemon.powder = false;
+    pokemon.syrupBomb = null;
+    if (pokemon.mimicBackup) {
+        pokemon.moveset[pokemon.mimicBackup.index] = pokemon.mimicBackup.original;
+        pokemon.mimicBackup = null;
+    }
     pokemon.illusion = null;
     pokemon.gulp = null;
     pokemon.cudChew = null;

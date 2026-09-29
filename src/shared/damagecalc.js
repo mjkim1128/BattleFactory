@@ -35,7 +35,7 @@ import {
 // effectiveness (an immunity still stops them). Level 100 pokemon only.
 const FIXED_DAMAGE_MOVES = new Set([
     "final-gambit", "seismic-toss", "night-shade", "psywave", "super-fang", "natures-madness", "endeavor",
-    "counter", "mirror-coat", "metal-burst",
+    "counter", "mirror-coat", "metal-burst", "sonic-boom", "dragon-rage",
 ]);
 export const isFixedDamageMove = (move) => FIXED_DAMAGE_MOVES.has(move.name);
 function fixedDamage(move, attacker, defender) {
@@ -58,6 +58,10 @@ function fixedDamage(move, attacker, defender) {
             return 2 * (attacker.lastSpecialDamage || 0);
         case "metal-burst":
             return Math.max(1, Math.floor(1.5 * (attacker.lastDamageTaken || 0)));
+        case "sonic-boom":
+            return 20;
+        case "dragon-rage":
+            return 40;
         default:
             return null;
     }
@@ -81,9 +85,32 @@ export function dynamicPower(move, attacker, defender, field) {
             const ratio = Math.max(Math.floor((attacker.hp[0] * 48) / attacker.hp[1]), 1);
             return ratio < 2 ? 200 : ratio < 5 ? 150 : ratio < 10 ? 100 : ratio < 17 ? 80 : ratio < 33 ? 40 : 20;
         }
+        case "electro-ball": {
+            const theirs = effectiveSpeed(defender, field);
+            const ratio = theirs > 0 ? Math.floor(effectiveSpeed(attacker, field) / theirs) : 0;
+            return [40, 60, 80, 120, 150][Math.min(ratio, 4)];
+        }
+        case "wring-out":
+        case "crush-grip":
+            return Math.max(1, Math.floor((120 * defender.hp[0]) / defender.hp[1]));
+        case "punishment":
+            return Math.min(200, 60 + 20 * defender.stat_levels.filter((s) => s > 0).reduce((a, s) => a + s, 0));
+        case "trump-card": {
+            const left = ppLeftOf(move);
+            return left === 0 ? 200 : left === 1 ? 80 : left === 2 ? 60 : left === 3 ? 50 : 40;
+        }
+        case "present": {
+            const r = Math.random();
+            return r < 0.5 ? 40 : r < 0.875 ? 80 : 120;
+        }
         default:
             return null;
     }
+}
+// Reads a move's own remaining PP (Trump Card): moves aren't always tracked with ppLeft set.
+function ppLeftOf(move) {
+    const cap = move.ppCap !== undefined ? move.ppCap : Math.floor((move.pp || 5) * 8 / 5);
+    return move.ppLeft === undefined ? cap : move.ppLeft;
 }
 
 // Grass Knot / Low Kick hit harder the heavier the target is; Heavy Slam / Heat Crash the
@@ -116,8 +143,8 @@ export function typeEffectiveness(move, defender, attacker = null) {
     if (move.name === "struggle") return 1; // typeless: never resisted, never immune
     // Levitate: Ground moves don't touch it (unless the attacker has Mold Breaker)
     if (move.type.name === "ground" && isGroundImmune(defender, attacker)) return 0;
-    // Magnet Rise: floating on magnetism
-    if (move.type.name === "ground" && defender.magnetRise && !(activeItem(defender) && defender.item.name === "iron-ball")) return 0;
+    // Magnet Rise / Telekinesis: floating out of Ground's reach
+    if (move.type.name === "ground" && (defender.magnetRise || defender.telekinesis) && !(activeItem(defender) && defender.item.name === "iron-ball")) return 0;
     if (
         move.type.name === "ground" &&
         activeItem(defender) &&
@@ -138,6 +165,7 @@ export function typeEffectiveness(move, defender, attacker = null) {
         defender.types.filter((t) => t.type.name === "water").length > 0
     )
         TE = TE * 4; // Freeze-dry vs water type
+    if (move.type.name === "fire" && defender.tarShot && TE > 0) TE = TE * 2; // Tar Shot
     // Wonder Guard: anything that isn't super effective bounces off
     if (TE !== 0 && TE <= 1 && isWonderGuard(defender, attacker)) return 0;
     return TE;
@@ -154,14 +182,16 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
     const fixed = fixedDamage(move, attacker, defender);
     if (fixed !== null) return type === 0 ? 0 : fixed;
     let category = move.damage_class.name;
+    // Wonder Room: Defense and Sp. Def swap roles for every damage calculation while it's up
+    const wonderRoom = !!(field && field.wonderRoom);
     let [attack, defense] =
         category === "physical"
-            ? [attacker.base_stats[1], defender.base_stats[2]]
-            : [attacker.base_stats[3], defender.base_stats[4]];
+            ? [attacker.base_stats[1], defender.base_stats[wonderRoom ? 4 : 2]]
+            : [attacker.base_stats[3], defender.base_stats[wonderRoom ? 2 : 4]];
     let [attack_level, defense_level] =
         category === "physical"
-            ? [attacker.stat_levels[0], defender.stat_levels[1]]
-            : [attacker.stat_levels[2], defender.stat_levels[3]];
+            ? [attacker.stat_levels[0], defender.stat_levels[wonderRoom ? 3 : 1]]
+            : [attacker.stat_levels[2], defender.stat_levels[wonderRoom ? 1 : 3]];
     if (move.name === "psyshock") [defense, defense_level] = [defender.base_stats[2], defender.stat_levels[1]]; // Psyshock
     if (move.name === "body-press") [attack, attack_level] = [attacker.base_stats[2], attacker.stat_levels[1]]; // Body-press
     if (move.name === "foul-play") [attack, attack_level] = [defender.base_stats[1], defender.stat_levels[0]]; // Foul-play
@@ -223,6 +253,8 @@ export function damageCalc(attacker, defender, move, ctx = {}) {
             power *= 1 + 0.2 * Math.min((attacker.moveRepeatCount || 1) - 1, 5);
     }
 
+    if (field && field.mudSport && move.type.name === "electric") power *= 1352 / 4096;
+    if (field && field.waterSport && move.type.name === "fire") power *= 1352 / 4096;
     power *= powerFieldMod(move, attacker, defender, field);
     power *= abilityBasePowerMod(attacker, defender, move, field);
     power *= move.abilityPowerMod || 1; // Pixilate & co. already changed the move's type
