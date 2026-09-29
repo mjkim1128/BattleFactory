@@ -295,6 +295,10 @@ export function Battle(props) {
     /// Mid-reveal, always show the live/animating board even if stepNumber hasn't caught up
     /// to history yet (updateHistory only runs once the turn finishes playing out).
     let isCurrent = !(stepNumber < history.length) || animFrames !== null;
+    /// Nothing playing out, nothing pending, and not looking back at an old turn via </>:
+    /// it's on the player to pick a move or a switch.
+    const isBrowsingPast = animFrames === null && stepNumber < history.length - 1;
+    const awaitingInput = !isBrowsingPast && !isAnimating && !isForceSwitch && !isGameOver;
     let displaypokes = isCurrent
         ? liveState.playerPokemon
         : history[stepNumber].playerPokemon;
@@ -439,10 +443,14 @@ export function Battle(props) {
                     style={animFrames ? { cursor: "pointer" } : undefined}
                 >
                     <div className="battle-announcer-child">
-                        {turns.length > 0 && (
-                            <div>
-                                <BattleAnnouncer text={announcerMessage} />
-                            </div>
+                        {awaitingInput ? (
+                            <div>Turn {turns.length + 1} - 행동을 결정하세요!</div>
+                        ) : (
+                            turns.length > 0 && (
+                                <div>
+                                    <BattleAnnouncer text={announcerMessage} />
+                                </div>
+                            )
                         )}
                     </div>
                 </div>
