@@ -292,7 +292,9 @@ export function Battle(props) {
     ]
         .filter(Boolean)
         .join(" · ");
-    let isCurrent = !(stepNumber < history.length);
+    /// Mid-reveal, always show the live/animating board even if stepNumber hasn't caught up
+    /// to history yet (updateHistory only runs once the turn finishes playing out).
+    let isCurrent = !(stepNumber < history.length) || animFrames !== null;
     let displaypokes = isCurrent
         ? liveState.playerPokemon
         : history[stepNumber].playerPokemon;
