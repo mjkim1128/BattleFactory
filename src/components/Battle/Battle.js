@@ -299,6 +299,12 @@ export function Battle(props) {
     /// it's on the player to pick a move or a switch.
     const isBrowsingPast = animFrames === null && stepNumber < history.length - 1;
     const awaitingInput = !isBrowsingPast && !isAnimating && !isForceSwitch && !isGameOver;
+    /// The player's own pokemon just fainted and it's on them (not the CPU) to send in the next one.
+    const needsPlayerSwitch =
+        isForceSwitch &&
+        !isGameOver &&
+        props.playerPokemon[0].hp[0] <= 0 &&
+        props.playerPokemon.slice(1).some((poke) => poke.hp[0] > 0);
     let displaypokes = isCurrent
         ? liveState.playerPokemon
         : history[stepNumber].playerPokemon;
@@ -443,7 +449,9 @@ export function Battle(props) {
                     style={animFrames ? { cursor: "pointer" } : undefined}
                 >
                     <div className="battle-announcer-child">
-                        {awaitingInput ? (
+                        {needsPlayerSwitch ? (
+                            <div>다음 포켓몬을 선택하세요!</div>
+                        ) : awaitingInput ? (
                             <div>Turn {turns.length + 1} - 행동을 결정하세요!</div>
                         ) : (
                             turns.length > 0 && (
