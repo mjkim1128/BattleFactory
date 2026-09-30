@@ -4,7 +4,7 @@ import { shuffle } from "shared";
 import { DEFAULT_MOVES } from "./legalmoves";
 import { ITEM_POOL, SPECIES_EXCLUSIVE_ITEMS, REAL_SET_ONLY_ITEMS } from "./iteminfo";
 import ELIGIBLE_POKEMON_IDS from "./eligible_pokemon_ids.json";
-import SPECIES_FACTORY_SETS from "./species_factory_sets.json";
+import SPECIES_FACTORY_SETS from "./species_factory_sets.js";
 
 export async function generateRandomItem(pokemonName) {
     const choices = shuffle(ITEM_POOL.filter((name) => !REAL_SET_ONLY_ITEMS.has(name)));
